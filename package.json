@@ -1,0 +1,29 @@
+{
+  "name": "deliverease-mock-server",
+  "version": "1.0.0",
+  "description": "Mock server for DeliverEase - Voice-based last-mile delivery coordination agent",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node test.js"
+  },
+  "keywords": [
+    "deliverease",
+    "mock-server",
+    "voice-agent",
+    "delivery",
+    "hackathon",
+    "express"
+  ],
+  "author": "DeliverEase Team",
+  "license": "ISC",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2"
+  }
+}
