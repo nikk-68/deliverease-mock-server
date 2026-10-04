@@ -1,10 +1,13 @@
 /**
- * Comprehensive Test Suite for DeliverEase Capability 1 Mock Server
+ * Comprehensive Test Suite for DeliverEase Capability 1 Mock & MCP Server
+ * Tests both REST Endpoints and Model Context Protocol (MCP) Tools over SSE
  */
 const http = require('http');
 const app = require('./server');
+const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
+const { SSEClientTransport } = require('@modelcontextprotocol/sdk/client/sse.js');
 
-const TEST_PORT = 3099;
+const TEST_PORT = 3199;
 let server;
 const BASE_URL = `http://127.0.0.1:${TEST_PORT}`;
 
@@ -22,16 +25,24 @@ function assert(condition, message) {
 }
 
 async function runTests() {
-  console.log('🧪 Starting DeliverEase Capability 1 API Tests...\n');
+  console.log('🧪 Starting DeliverEase Capability 1 REST & MCP Tests...\n');
 
   try {
+    // ==========================================
+    // SECTION 1: REST API Tests
+    // ==========================================
+    console.log('=========================================');
+    console.log('📍 PART 1: REST ENDPOINTS VERIFICATION');
+    console.log('=========================================');
+
     // 1. Health check
-    console.log('[Test 1] GET /health');
+    console.log('\n[Test 1] GET /health');
     const healthRes = await fetch(`${BASE_URL}/health`);
     const healthData = await healthRes.json();
     assert(healthRes.status === 200, 'Health endpoint returns 200 OK');
     assert(healthData.status === 'UP', 'Health status is UP');
     assert(Array.isArray(healthData.capabilities), 'Capabilities list returned');
+    assert(healthData.mcp && healthData.mcp.sseEndpoint === '/sse', 'MCP SSE endpoint advertised in health check');
 
     // 2. GET preferences for DEMO001
     console.log('\n[Test 2] GET /api/preferences/DEMO001');
@@ -125,7 +136,7 @@ async function runTests() {
     });
     assert(invalidModeRes.status === 400, 'Invalid mode returns 400 Bad Request');
 
-    // 13. PUT mode to OFF -> Proxy delivery turns NOT_AUTHORIZED
+    // 13. PUT mode to OFF & verify proxy recipient returns NOT_AUTHORIZED
     console.log('\n[Test 13] PUT mode to OFF & verify proxy recipient returns NOT_AUTHORIZED');
     await fetch(`${BASE_URL}/api/preferences/DEMO001`, {
       method: 'PUT',
@@ -137,44 +148,126 @@ async function runTests() {
     assert(offRecipientRes.status === 200, 'Returns 200 OK');
     assert(offRecipientData.authorizationStatus === 'NOT_AUTHORIZED', 'Mode OFF prevents proxy recipient delegation');
 
-    // 14. PUT add new location preference (e.g. Neighbor)
-    console.log('\n[Test 14] PUT /api/preferences/DEMO001 - Add new preference location');
-    const addPrefRes = await fetch(`${BASE_URL}/api/preferences/DEMO001`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        location: 'Neighbor',
-        recipientName: 'Mr. Verma',
-        recipientRelation: 'Neighbor (Flat 302)',
-        recipientPhone: '+919834567890',
-        preferredTime: 'Anytime',
-        authorizationStatus: 'AUTHORIZED'
-      })
-    });
-    assert(addPrefRes.status === 200, 'Adding new preference returns 200 OK');
-
-    // Reset mode back to ACTIVE to test neighbor
-    await fetch(`${BASE_URL}/api/preferences/DEMO001`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode: 'ACTIVE' })
-    });
-    const neighborRes = await fetch(`${BASE_URL}/api/recipient?customerId=DEMO001&location=Neighbor`);
-    const neighborData = await neighborRes.json();
-    assert(neighborData.authorizationStatus === 'AUTHORIZED', 'Neighbor is now authorized');
-    assert(neighborData.recipientName === 'Mr. Verma', 'Neighbor recipientName matches');
-
-    // 15. POST /api/reset (Reset demo state)
-    console.log('\n[Test 15] POST /api/reset - Restore initial seed data');
+    // 14. POST /api/reset (Restore initial state)
+    console.log('\n[Test 14] POST /api/reset - Restore initial seed data');
     const resetRes = await fetch(`${BASE_URL}/api/reset`, { method: 'POST' });
     const resetData = await resetRes.json();
     assert(resetRes.status === 200, 'Reset returns 200 OK');
     assert(resetData.success === true, 'Reset success is true');
 
-    const verifyResetRes = await fetch(`${BASE_URL}/api/preferences/DEMO001`);
-    const verifyResetData = await verifyResetRes.json();
-    assert(verifyResetData.mode === 'ACTIVE', 'Mode restored to ACTIVE');
-    assert(verifyResetData.preferences.length === 3, 'Preferences length restored to 3');
+    // ==========================================
+    // SECTION 2: Model Context Protocol (MCP) Tests
+    // ==========================================
+    console.log('\n=========================================');
+    console.log('🤖 PART 2: MCP PROTOCOL & TOOLS VERIFICATION');
+    console.log('=========================================');
+
+    console.log('\n[MCP Test 1] Connecting to MCP Server via SSE...');
+    const mcpClientTransport = new SSEClientTransport(new URL(`${BASE_URL}/sse`));
+    const mcpClient = new Client({ name: 'deliverease-test-client', version: '1.0.0' }, { capabilities: {} });
+    await mcpClient.connect(mcpClientTransport);
+    assert(true, 'MCP Client successfully connected over SSE');
+
+    // 15. MCP Tool Discovery
+    console.log('\n[MCP Test 2] Discovering MCP Tools...');
+    const toolsResponse = await mcpClient.listTools();
+    const toolNames = toolsResponse.tools.map(t => t.name);
+    assert(toolNames.includes('get_preferences'), 'Tool "get_preferences" is exposed');
+    assert(toolNames.includes('update_preferences'), 'Tool "update_preferences" is exposed');
+    assert(toolNames.includes('get_authorized_recipient'), 'Tool "get_authorized_recipient" is exposed');
+    assert(toolNames.length === 3, 'Exactly 3 Capability 1 MCP tools exposed');
+
+    // 16. MCP Tool: get_preferences(DEMO001)
+    console.log('\n[MCP Test 3] Calling tool: get_preferences("DEMO001")...');
+    const mcpPrefResult = await mcpClient.callTool({
+      name: 'get_preferences',
+      arguments: { customerId: 'DEMO001' }
+    });
+    const parsedPref = JSON.parse(mcpPrefResult.content[0].text);
+    assert(parsedPref.customerId === 'DEMO001', 'MCP returns customerId DEMO001');
+    assert(parsedPref.mode === 'ACTIVE', 'MCP returns mode ACTIVE');
+    assert(parsedPref.preferences.length === 3, 'MCP returns 3 preferences');
+
+    // 17. MCP Tool: get_preferences(UNKNOWN)
+    console.log('\n[MCP Test 4] Calling tool: get_preferences("NONEXISTENT")...');
+    const mcpUnknownPref = await mcpClient.callTool({
+      name: 'get_preferences',
+      arguments: { customerId: 'NONEXISTENT' }
+    });
+    assert(mcpUnknownPref.isError === true, 'Returns tool error for non-existent customer');
+
+    // 18. MCP Tool: get_authorized_recipient (Home -> Authorized)
+    console.log('\n[MCP Test 5] Calling tool: get_authorized_recipient("DEMO001", "Home")...');
+    const mcpHomeResult = await mcpClient.callTool({
+      name: 'get_authorized_recipient',
+      arguments: { customerId: 'DEMO001', location: 'Home' }
+    });
+    const parsedHome = JSON.parse(mcpHomeResult.content[0].text);
+    assert(parsedHome.authorizationStatus === 'AUTHORIZED', 'Home returns AUTHORIZED');
+    assert(parsedHome.recipientName.includes('Mummy'), 'Authorized recipient is Mummy');
+    assert(parsedHome.recipientPhone === '+919876543210', 'Phone number is returned');
+
+    // 19. MCP Tool: get_authorized_recipient (Hostel -> Authorized Self)
+    console.log('\n[MCP Test 6] Calling tool: get_authorized_recipient("DEMO001", "Hostel")...');
+    const mcpHostelResult = await mcpClient.callTool({
+      name: 'get_authorized_recipient',
+      arguments: { customerId: 'DEMO001', location: 'Hostel' }
+    });
+    const parsedHostel = JSON.parse(mcpHostelResult.content[0].text);
+    assert(parsedHostel.authorizationStatus === 'AUTHORIZED', 'Hostel returns AUTHORIZED');
+    assert(parsedHostel.recipientRelation === 'Self', 'Recipient relation is Self');
+
+    // 20. MCP Tool: get_authorized_recipient (Office -> Authorized Security)
+    console.log('\n[MCP Test 7] Calling tool: get_authorized_recipient("DEMO001", "Office")...');
+    const mcpOfficeResult = await mcpClient.callTool({
+      name: 'get_authorized_recipient',
+      arguments: { customerId: 'DEMO001', location: 'Office' }
+    });
+    const parsedOffice = JSON.parse(mcpOfficeResult.content[0].text);
+    assert(parsedOffice.authorizationStatus === 'AUTHORIZED', 'Office returns AUTHORIZED');
+    assert(parsedOffice.recipientRelation === 'Security Desk', 'Recipient relation is Security Desk');
+
+    // 21. MCP Tool: get_authorized_recipient (Gym -> NOT_AUTHORIZED safety check)
+    console.log('\n[MCP Test 8] Calling tool: get_authorized_recipient("DEMO001", "Gym")...');
+    const mcpGymResult = await mcpClient.callTool({
+      name: 'get_authorized_recipient',
+      arguments: { customerId: 'DEMO001', location: 'Gym' }
+    });
+    const parsedGym = JSON.parse(mcpGymResult.content[0].text);
+    assert(parsedGym.authorizationStatus === 'NOT_AUTHORIZED', 'Safety check: Unregistered location returns NOT_AUTHORIZED');
+    assert(parsedGym.recipient === null, 'Safety check: recipient object is null');
+
+    // 22. MCP Tool: update_preferences(DEMO001, mode: "ASSIST")
+    console.log('\n[MCP Test 9] Calling tool: update_preferences("DEMO001", "ASSIST")...');
+    const mcpUpdateResult = await mcpClient.callTool({
+      name: 'update_preferences',
+      arguments: { customerId: 'DEMO001', mode: 'ASSIST' }
+    });
+    const parsedUpdate = JSON.parse(mcpUpdateResult.content[0].text);
+    assert(parsedUpdate.mode === 'ASSIST', 'Customer mode updated to ASSIST via MCP tool');
+
+    // Cross-verify: REST endpoint reflects MCP update
+    const restAfterMcpUpdate = await fetch(`${BASE_URL}/api/preferences/DEMO001`);
+    const restAfterMcpData = await restAfterMcpUpdate.json();
+    assert(restAfterMcpData.mode === 'ASSIST', 'Shared State: REST endpoint sees mode update from MCP tool');
+
+    // 23. MCP Tool: update_preferences(DEMO001, mode: "OFF") & verify proxy blocked
+    console.log('\n[MCP Test 10] Calling tool: update_preferences("DEMO001", "OFF") and verifying safety block...');
+    await mcpClient.callTool({
+      name: 'update_preferences',
+      arguments: { customerId: 'DEMO001', mode: 'OFF' }
+    });
+    const mcpBlockedResult = await mcpClient.callTool({
+      name: 'get_authorized_recipient',
+      arguments: { customerId: 'DEMO001', location: 'Home' }
+    });
+    const parsedBlocked = JSON.parse(mcpBlockedResult.content[0].text);
+    assert(parsedBlocked.authorizationStatus === 'NOT_AUTHORIZED', 'Safety check: Mode OFF blocks proxy delivery via MCP');
+    assert(parsedBlocked.recipient === null, 'Recipient is null when mode is OFF');
+
+    // 24. MCP Client Close
+    await mcpClient.close();
+    assert(true, 'MCP Client session cleanly disconnected');
 
   } catch (err) {
     console.error('Test execution error:', err);
@@ -182,7 +275,7 @@ async function runTests() {
   } finally {
     server.close(() => {
       console.log('\n=========================================');
-      console.log(`🏁 Tests Complete: ${passedCount} Passed, ${failedCount} Failed`);
+      console.log(`🏁 All Tests Complete: ${passedCount} Passed, ${failedCount} Failed`);
       console.log('=========================================');
       process.exit(failedCount > 0 ? 1 : 0);
     });

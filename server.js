@@ -1,6 +1,9 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
+const { SSEServerTransport } = require('@modelcontextprotocol/sdk/server/sse.js');
+const { z } = require('zod');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -80,7 +83,259 @@ function validatePreferenceItem(pref) {
 }
 
 // ==========================================
-// API Routes
+// MCP (Model Context Protocol) Server & Tools
+// ==========================================
+function createDeliverEaseMcpServer() {
+  const mcpServer = new McpServer({
+    name: 'deliverease-mcp-server',
+    version: '1.0.0'
+  });
+
+  // Tool 1: get_preferences(customerId)
+  mcpServer.tool(
+    'get_preferences',
+    'Retrieve customer delivery mode (ACTIVE | ASSIST | OFF) and saved location preferences.',
+    {
+      customerId: z.string().describe('Customer identifier (e.g. DEMO001)')
+    },
+    async ({ customerId }) => {
+      const key = customerId ? customerId.trim().toUpperCase() : '';
+      const customer = customersStore[key];
+      if (!customer) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                success: false,
+                error: `Customer not found with ID '${customerId}'.`,
+                customerId
+              })
+            }
+          ]
+        };
+      }
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              success: true,
+              customerId: customer.customerId,
+              mode: customer.mode,
+              preferences: customer.preferences
+            }, null, 2)
+          }
+        ]
+      };
+    }
+  );
+
+  // Tool 2: update_preferences(customerId, mode)
+  mcpServer.tool(
+    'update_preferences',
+    'Update delivery mode (ACTIVE, ASSIST, OFF) for a customer.',
+    {
+      customerId: z.string().describe('Customer identifier (e.g. DEMO001)'),
+      mode: z.enum(['ACTIVE', 'ASSIST', 'OFF']).describe('Delivery mode: ACTIVE, ASSIST, or OFF')
+    },
+    async ({ customerId, mode }) => {
+      const key = customerId ? customerId.trim().toUpperCase() : '';
+      const customer = customersStore[key];
+      if (!customer) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                success: false,
+                error: `Customer not found with ID '${customerId}'.`
+              })
+            }
+          ]
+        };
+      }
+
+      customer.mode = mode.trim().toUpperCase();
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              success: true,
+              message: `Customer '${customer.customerId}' delivery mode updated to ${customer.mode}.`,
+              customerId: customer.customerId,
+              mode: customer.mode,
+              preferences: customer.preferences
+            }, null, 2)
+          }
+        ]
+      };
+    }
+  );
+
+  // Tool 3: get_authorized_recipient(customerId, location)
+  mcpServer.tool(
+    'get_authorized_recipient',
+    'Query authorized recipient for a customer delivery location following safety rules. Never invents recipients; returns clear NOT_AUTHORIZED if no recipient is authorized or mode is OFF.',
+    {
+      customerId: z.string().describe('Customer identifier (e.g. DEMO001)'),
+      location: z.string().describe('Delivery location name (e.g. Home, Hostel, Office)')
+    },
+    async ({ customerId, location }) => {
+      const cleanCustomerId = customerId ? customerId.trim().toUpperCase() : '';
+      const cleanLocation = location ? location.trim() : '';
+
+      const customer = customersStore[cleanCustomerId];
+      if (!customer) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                success: false,
+                authorizationStatus: 'NOT_AUTHORIZED',
+                error: `Customer not found with ID '${customerId}'.`,
+                customerId: cleanCustomerId,
+                location: cleanLocation
+              }, null, 2)
+            }
+          ]
+        };
+      }
+
+      // Safety rule: mode OFF disables proxy recipient delivery
+      if (customer.mode === 'OFF') {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                success: true,
+                customerId: customer.customerId,
+                location: cleanLocation,
+                mode: customer.mode,
+                authorizationStatus: 'NOT_AUTHORIZED',
+                recipient: null,
+                message: 'Proxy recipient delivery is disabled because customer delivery mode is set to OFF.'
+              }, null, 2)
+            }
+          ]
+        };
+      }
+
+      // Location match
+      const matchedPref = customer.preferences.find(
+        p => p.location.trim().toLowerCase() === cleanLocation.toLowerCase()
+      );
+
+      // Safety rule: never invent an authorized recipient
+      if (!matchedPref || matchedPref.authorizationStatus !== 'AUTHORIZED') {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                success: true,
+                customerId: customer.customerId,
+                location: cleanLocation,
+                mode: customer.mode,
+                authorizationStatus: 'NOT_AUTHORIZED',
+                recipient: null,
+                message: `No authorized recipient found for location "${cleanLocation}".`
+              }, null, 2)
+            }
+          ]
+        };
+      }
+
+      // Authorized recipient response - only necessary coordination data
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              success: true,
+              customerId: customer.customerId,
+              location: matchedPref.location,
+              mode: customer.mode,
+              authorizationStatus: 'AUTHORIZED',
+              recipientName: matchedPref.recipientName,
+              recipientRelation: matchedPref.recipientRelation,
+              recipientPhone: matchedPref.recipientPhone,
+              preferredTime: matchedPref.preferredTime,
+              recipient: {
+                name: matchedPref.recipientName,
+                relation: matchedPref.recipientRelation,
+                phone: matchedPref.recipientPhone,
+                preferredTime: matchedPref.preferredTime
+              }
+            }, null, 2)
+          }
+        ]
+      };
+    }
+  );
+
+  return mcpServer;
+}
+
+// Active SSE transports map
+const sseTransports = new Map();
+
+/**
+ * MCP SSE Transport Endpoint
+ * GET /sse
+ */
+app.get('/sse', async (req, res) => {
+  try {
+    const mcpServer = createDeliverEaseMcpServer();
+    const transport = new SSEServerTransport('/messages', res);
+    sseTransports.set(transport.sessionId, transport);
+
+    res.on('close', () => {
+      sseTransports.delete(transport.sessionId);
+    });
+
+    await mcpServer.connect(transport);
+  } catch (err) {
+    console.error('Error establishing SSE transport:', err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Error establishing SSE transport' });
+    }
+  }
+});
+
+/**
+ * MCP Messages Endpoint
+ * POST /messages?sessionId=...
+ */
+app.post('/messages', async (req, res) => {
+  const sessionId = req.query.sessionId;
+  if (!sessionId) {
+    return res.status(400).json({ error: 'Missing required query parameter: "sessionId".' });
+  }
+
+  const transport = sseTransports.get(sessionId);
+  if (!transport) {
+    return res.status(404).json({ error: `Session not found: '${sessionId}'.` });
+  }
+
+  try {
+    await transport.handlePostMessage(req, res, req.body);
+  } catch (err) {
+    console.error('Error handling MCP post message:', err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Internal error processing message' });
+    }
+  }
+});
+
+// ==========================================
+// REST API Routes (Capability 1)
 // ==========================================
 
 /**
@@ -90,11 +345,21 @@ function validatePreferenceItem(pref) {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'UP',
-    service: 'DeliverEase Mock Server',
+    service: 'DeliverEase Mock & MCP Server',
     version: '1.0.0',
     capabilities: [
-      'CAPABILITY 1 — Trusted Recipient & Delivery Preferences'
+      'CAPABILITY 1 — Trusted Recipient & Delivery Preferences (REST)',
+      'CAPABILITY 1 — Model Context Protocol (MCP) Tools'
     ],
+    mcp: {
+      sseEndpoint: '/sse',
+      messagesEndpoint: '/messages',
+      tools: [
+        'get_preferences',
+        'update_preferences',
+        'get_authorized_recipient'
+      ]
+    },
     timestamp: new Date().toISOString()
   });
 });
@@ -249,12 +514,6 @@ app.put('/api/preferences/:customerId', (req, res) => {
  * 3. GET /api/recipient
  * Query params: customerId, location
  * Return the authorized recipient for that delivery location.
- *
- * Safety Rules Enforced:
- * - Never invent an authorized recipient.
- * - If no authorized recipient exists, return a clear NOT_AUTHORIZED result.
- * - Never expose unnecessary data.
- * - Validate all inputs.
  */
 app.get('/api/recipient', (req, res) => {
   const { customerId, location } = req.query;
@@ -362,6 +621,8 @@ app.use((req, res) => {
     error: `Cannot ${req.method} ${req.path}. Endpoint not found.`,
     availableEndpoints: [
       'GET /health',
+      'GET /sse (MCP SSE connection)',
+      'POST /messages?sessionId=... (MCP messages)',
       'GET /api/preferences/:customerId',
       'PUT /api/preferences/:customerId',
       'GET /api/recipient?customerId=...&location=...',
@@ -385,9 +646,12 @@ app.use((err, req, res, next) => {
 if (require.main === module) {
   app.listen(PORT, HOST, () => {
     console.log(`===================================================`);
-    console.log(`🚀 DeliverEase Mock Server running at http://${HOST}:${PORT}`);
+    console.log(`🚀 DeliverEase Mock & MCP Server running at http://${HOST}:${PORT}`);
     console.log(`📡 Health Check : http://${HOST}:${PORT}/health`);
+    console.log(`🔌 MCP SSE      : http://${HOST}:${PORT}/sse`);
+    console.log(`💬 MCP Messages : http://${HOST}:${PORT}/messages`);
     console.log(`📦 Capability 1 : Trusted Recipient & Delivery Preferences`);
+    console.log(`🛠️  MCP Tools   : get_preferences, update_preferences, get_authorized_recipient`);
     console.log(`📋 Demo Customer: DEMO001 (Home, Hostel, Office)`);
     console.log(`===================================================`);
   });

@@ -1,6 +1,6 @@
-# 📦 DeliverEase Mock Server
+# 📦 DeliverEase Mock & MCP Server
 
-Production-ready REST mock server for **DeliverEase** — a voice-based last-mile delivery coordination agent.
+Production-ready REST & **Model Context Protocol (MCP)** server for **DeliverEase** — a voice-based last-mile delivery coordination agent.
 
 DeliverEase helps delivery partners seamlessly coordinate deliveries via an AI voice agent, verifying trusted proxy recipients (family, security desk, self, neighbors) and respecting user delivery preferences when customers are busy or away.
 
@@ -10,13 +10,54 @@ DeliverEase helps delivery partners seamlessly coordinate deliveries via an AI v
 
 ### **CAPABILITY 1 — Trusted Recipient & Delivery Preferences**
 
-Handles customer delivery modes (`ACTIVE`, `ASSIST`, `OFF`), delivery preferences across multiple locations (Home, Hostel, Office), and resolves whether a proxy recipient is authorized to receive a parcel.
+Supports both **REST API endpoints** and standard **MCP Tools over SSE** (`/sse` & `/messages`) compatible with remote HTTP deployment on Render.
 
 #### Key Safety Rules Enforced:
 1. **Never invent an authorized recipient**: If a location or customer is unregistered or unauthorized, the server returns a clear `NOT_AUTHORIZED` status.
 2. **Safe Mode Enforcement**: If the customer sets delivery mode to `OFF`, proxy delegation is disabled and queries resolve to `NOT_AUTHORIZED`.
 3. **Least Privilege Data Exposure**: Returns only the minimal necessary recipient details (`recipientName`, `recipientRelation`, `recipientPhone`, `preferredTime`) required for the delivery agent to coordinate handover.
-4. **Input Validation**: Rejects invalid modes, malformed bodies, and missing query parameters with descriptive `400 Bad Request` responses.
+4. **Input Validation**: Strict input validation using Zod for MCP tools and Express schema checks for REST endpoints.
+
+---
+
+## 🤖 Model Context Protocol (MCP) Tools
+
+The server runs a standard MCP server implementation over Server-Sent Events (SSE), enabling AI agents (e.g. Claude Desktop, Cursor, custom voice agents) to invoke tools directly over HTTP.
+
+### Available MCP Tools:
+
+#### 1. `get_preferences`
+- **Description**: Return customer delivery mode (`ACTIVE` \| `ASSIST` \| `OFF`) and saved location preferences.
+- **Parameters**:
+  - `customerId` (string, required): e.g. `"DEMO001"`
+
+#### 2. `update_preferences`
+- **Description**: Update delivery mode (`ACTIVE`, `ASSIST`, or `OFF`) for a customer.
+- **Parameters**:
+  - `customerId` (string, required): e.g. `"DEMO001"`
+  - `mode` (`"ACTIVE"` \| `"ASSIST"` \| `"OFF"`, required)
+
+#### 3. `get_authorized_recipient`
+- **Description**: Query authorized recipient for a customer delivery location following safety rules. Never invents recipients; returns clear `NOT_AUTHORIZED` if no recipient is authorized or mode is `OFF`.
+- **Parameters**:
+  - `customerId` (string, required): e.g. `"DEMO001"`
+  - `location` (string, required): e.g. `"Home"`, `"Hostel"`, `"Office"`
+
+### MCP Connection Endpoints:
+- **SSE Transport URL**: `GET /sse`
+- **Message Receiver**: `POST /messages?sessionId={sessionId}`
+
+#### MCP Client Configuration Example (e.g. Claude Desktop or Cursor):
+```json
+{
+  "mcpServers": {
+    "deliverease": {
+      "url": "https://deliverease-mock-server.onrender.com/sse"
+    }
+  }
+}
+```
+*(For local testing, use `http://localhost:3000/sse`)*
 
 ---
 
