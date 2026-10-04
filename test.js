@@ -1,6 +1,6 @@
 /**
- * Comprehensive Test Suite for DeliverEase 3 Custom Capabilities
- * Tests both REST Endpoints and Model Context Protocol (MCP) Tools over SSE
+ * Comprehensive Automated Test Suite for DeliverEase Mock & MCP Server
+ * Validates All 3 Capabilities across REST Endpoints and 9 MCP Tools over SSE
  */
 const http = require('http');
 const app = require('./server');
@@ -25,321 +25,401 @@ function assert(condition, message) {
 }
 
 async function runTests() {
-  console.log('🧪 Starting DeliverEase 3 Custom Capabilities REST & MCP Tests...\n');
+  console.log('🧪 Starting DeliverEase 3 Capabilities REST & MCP Tests...\n');
 
   try {
     // ==========================================
-    // SECTION 1: REST API Tests
+    // SECTION 1: REST API Tests (All 3 Capabilities)
     // ==========================================
     console.log('=========================================');
-    console.log('📍 PART 1: REST ENDPOINTS (Capabilities 1, 2, 3)');
+    console.log('📍 PART 1: REST ENDPOINTS (CAPABILITIES 1, 2, 3)');
     console.log('=========================================');
 
     // 1. Health check
-    console.log('\n[Test 1] GET /health');
+    console.log('\n[REST Test 1] GET /health');
     const healthRes = await fetch(`${BASE_URL}/health`);
     const healthData = await healthRes.json();
     assert(healthRes.status === 200, 'Health endpoint returns 200 OK');
     assert(healthData.status === 'UP', 'Health status is UP');
-    assert(healthData.capabilities.length === 3, 'All 3 DeliverEase capabilities listed');
-    assert(healthData.mcp && healthData.mcp.tools.length === 8, 'All 8 MCP tools advertised in health check');
+    assert(healthData.capabilities.length === 3, 'All 3 capabilities listed in health check');
+    assert(healthData.mcp && healthData.mcp.toolCount === 9, 'Exactly 9 MCP tools listed in health check');
 
-    // 2. Capability 1 REST: Preferences
-    console.log('\n[Test 2] GET /api/preferences/DEMO001');
+    // 2. Capability 1: GET preferences for DEMO001
+    console.log('\n[REST Test 2] GET /api/preferences/DEMO001');
     const prefRes = await fetch(`${BASE_URL}/api/preferences/DEMO001`);
     const prefData = await prefRes.json();
-    assert(prefRes.status === 200, 'Preferences endpoint returns 200 OK');
+    assert(prefRes.status === 200, 'DEMO001 preferences returns 200 OK');
     assert(prefData.customerId === 'DEMO001', 'CustomerId is DEMO001');
-    assert(prefData.mode === 'ACTIVE', 'Initial mode is ACTIVE');
-    assert(prefData.preferences.length === 3, 'Contains 3 locations: Home, Hostel, Office');
+    assert(prefData.mode === 'ACTIVE', 'Mode is ACTIVE');
+    assert(prefData.preferences.length === 3, 'Contains 3 seed locations (Home, Hostel, Office)');
 
-    // 3. Capability 1 REST: Recipient resolution
-    console.log('\n[Test 3] GET /api/recipient queries');
+    // 3. Capability 1: GET recipient for Home (Authorized Mummy)
+    console.log('\n[REST Test 3] GET /api/recipient?customerId=DEMO001&location=Home');
     const homeRes = await fetch(`${BASE_URL}/api/recipient?customerId=DEMO001&location=Home`);
     const homeData = await homeRes.json();
-    assert(homeData.authorizationStatus === 'AUTHORIZED', 'Home recipient authorized (Mummy)');
+    assert(homeRes.status === 200, 'Returns 200 OK');
+    assert(homeData.authorizationStatus === 'AUTHORIZED', 'Authorization status is AUTHORIZED');
+    assert(homeData.recipientName.includes('Mummy'), 'Recipient name contains Mummy');
+    assert(homeData.recipientPhone === '+919876543210', 'Phone number matches seed');
 
-    const hostelRes = await fetch(`${BASE_URL}/api/recipient?customerId=DEMO001&location=Hostel`);
-    const hostelData = await hostelRes.json();
-    assert(hostelData.authorizationStatus === 'AUTHORIZED', 'Hostel recipient authorized (Self)');
-
-    const officeRes = await fetch(`${BASE_URL}/api/recipient?customerId=DEMO001&location=Office`);
-    const officeData = await officeRes.json();
-    assert(officeData.authorizationStatus === 'AUTHORIZED', 'Office recipient authorized (Security Desk)');
-
+    // 4. Capability 1: GET recipient for unauthorized location (Gym)
+    console.log('\n[REST Test 4] GET /api/recipient?customerId=DEMO001&location=Gym');
     const gymRes = await fetch(`${BASE_URL}/api/recipient?customerId=DEMO001&location=Gym`);
     const gymData = await gymRes.json();
+    assert(gymRes.status === 200, 'Returns 200 OK');
     assert(gymData.authorizationStatus === 'NOT_AUTHORIZED', 'Safety rule: Unregistered location returns NOT_AUTHORIZED');
+    assert(gymData.recipient === null, 'Safety rule: recipient object is null');
 
-    // 4. Capability 2 REST: Policy check
-    console.log('\n[Test 4] GET /api/policy/DEMO001');
-    const policyRes = await fetch(`${BASE_URL}/api/policy/DEMO001`);
-    const policyData = await policyRes.json();
-    assert(policyRes.status === 200, 'Policy endpoint returns 200 OK');
-    assert(policyData.policy.currentMode === 'ACTIVE', 'Current mode is ACTIVE');
-    assert(policyData.policy.autonomousActionsAllowed === true, 'Autonomous actions allowed in ACTIVE mode');
-    assert(policyData.policy.proxyHandoffAllowed === true, 'Proxy handoff allowed in ACTIVE mode');
-
-    // 5. Capability 2 REST: Evaluate Action
-    console.log('\n[Test 5] POST /api/policy/DEMO001/evaluate');
-    const evalRes = await fetch(`${BASE_URL}/api/policy/DEMO001/evaluate`, {
+    // 5. Capability 2: POST /api/recovery/options
+    console.log('\n[REST Test 5] POST /api/recovery/options (delivery failed)');
+    const recOptRes = await fetch(`${BASE_URL}/api/recovery/options`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ situation: 'customer_unavailable' })
+      body: JSON.stringify({ customerId: 'DEMO001', shipmentId: 'SHIP001', situation: 'delivery failed' })
     });
-    const evalData = await evalRes.json();
-    assert(evalRes.status === 200, 'Evaluate action returns 200 OK');
-    assert(evalData.evaluation.decision === 'ALLOW', 'Customer unavailable under ACTIVE mode results in ALLOW');
+    const recOptData = await recOptRes.json();
+    assert(recOptRes.status === 200, 'Recovery options returns 200 OK');
+    assert(recOptData.recommendedAction === 'REATTEMPT', 'Recommended action is REATTEMPT');
+    assert(Array.isArray(recOptData.availableActions), 'Available actions is an array');
 
-    // 6. Capability 3 REST: Resolution Plan
-    console.log('\n[Test 6] POST /api/resolution-plan');
-    const planRes = await fetch(`${BASE_URL}/api/resolution-plan`, {
+    // 6. Capability 2: POST /api/recovery/plan
+    console.log('\n[REST Test 6] POST /api/recovery/plan (REATTEMPT)');
+    const planRes = await fetch(`${BASE_URL}/api/recovery/plan`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         customerId: 'DEMO001',
         shipmentId: 'SHIP001',
-        situation: 'courier_cannot_access_location'
+        situation: 'delivery attempt missed',
+        requestedAction: 'REATTEMPT'
       })
     });
     const planData = await planRes.json();
-    assert(planRes.status === 200, 'Resolution plan endpoint returns 200 OK');
-    assert(planData.plan.resolutionType === 'GATE_ACCESS_COORDINATION', 'Resolution type is GATE_ACCESS_COORDINATION');
-    assert(planData.plan.escalationRequired === true, 'Access issues require escalation');
+    assert(planRes.status === 200, 'Plan creation returns 200 OK');
+    assert(planData.success === true, 'Plan creation success is true');
+    assert(planData.recoveryAction === 'REATTEMPT', 'Recovery action is REATTEMPT');
+    assert(planData.requiredInformation.includes('targetReattemptDate'), 'Requires targetReattemptDate');
 
-    // 7. Capability 3 REST: Timeline & Audit Event
-    console.log('\n[Test 7] Timeline endpoints');
-    const timelineRes = await fetch(`${BASE_URL}/api/timeline?customerId=DEMO001&shipmentId=SHIP001`);
-    const timelineData = await timelineRes.json();
-    assert(timelineRes.status === 200, 'Timeline retrieved successfully');
-    assert(timelineData.totalEvents >= 3, 'Pre-seeded timeline has events for SHIP001');
+    // 7. Capability 2: GET /api/recovery/status/:shipmentId
+    console.log('\n[REST Test 7] GET /api/recovery/status/SHIP001');
+    const statusRes = await fetch(`${BASE_URL}/api/recovery/status/SHIP001`);
+    const statusData = await statusRes.json();
+    assert(statusRes.status === 200, 'Recovery status returns 200 OK');
+    assert(statusData.status === 'PLAN_CREATED', 'Safety rule: Status is PLAN_CREATED (never claimed executed without confirmation)');
 
-    // Record an event via REST
-    const recordRes = await fetch(`${BASE_URL}/api/timeline/events`, {
+    // 8. Capability 3: POST /api/notifications (CUSTOMER)
+    console.log('\n[REST Test 8] POST /api/notifications (CUSTOMER)');
+    const notifRes = await fetch(`${BASE_URL}/api/notifications`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         customerId: 'DEMO001',
         shipmentId: 'SHIP001',
-        eventType: 'COURIER_CALL_ATTEMPTED',
-        details: { courierPhone: '+919876500000', status: 'RINGING' }
+        recipientType: 'CUSTOMER',
+        notificationType: 'DELIVERY_UPDATE',
+        message: 'Your courier is approaching in 15 minutes.'
       })
     });
-    assert(recordRes.status === 201, 'New audit event created with 201 Created');
+    const notifData = await notifRes.json();
+    assert(notifRes.status === 201, 'Notification created with 201 Created');
+    assert(notifData.status === 'PENDING', 'Notification status initialized to PENDING');
+    const createdNotifId = notifData.notificationId;
 
-    // Safety rule check: cannot claim completion without connector confirmation
-    const invalidCompleteRes = await fetch(`${BASE_URL}/api/timeline/events`, {
-      method: 'POST',
+    // 9. Capability 3: PUT /api/notifications/:notificationId (Update to DELIVERED with connector)
+    console.log('\n[REST Test 9] PUT /api/notifications/:id (Status update with connector confirmation)');
+    const updateNotifRes = await fetch(`${BASE_URL}/api/notifications/${createdNotifId}`, {
+      method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        customerId: 'DEMO001',
-        shipmentId: 'SHIP001',
-        eventType: 'DELIVERY_COMPLETED',
-        details: { note: 'Claimed by voice agent without connector confirmation' }
+        status: 'DELIVERED',
+        connector: 'Twilio-SMS',
+        details: 'Delivered to handset'
       })
     });
-    assert(invalidCompleteRes.status === 400, 'Safety Rule: Rejects delivery completion claim without connector confirmation');
+    const updateNotifData = await updateNotifRes.json();
+    assert(updateNotifRes.status === 200, 'Status update returns 200 OK');
+    assert(updateNotifData.status === 'DELIVERED', 'Status updated to DELIVERED');
+    assert(updateNotifData.connector === 'Twilio-SMS', 'Connector confirmation recorded');
+
+    // 10. Capability 3: GET /api/notifications/:shipmentId (History)
+    console.log('\n[REST Test 10] GET /api/notifications/SHIP001');
+    const histRes = await fetch(`${BASE_URL}/api/notifications/SHIP001`);
+    const histData = await histRes.json();
+    assert(histRes.status === 200, 'Notification history returns 200 OK');
+    assert(Array.isArray(histData.history), 'History returned as array');
+    assert(histData.totalNotifications >= 2, 'History contains seed + newly created notification');
+
+    // 11. Reset test
+    console.log('\n[REST Test 11] POST /api/reset');
+    const resetRes = await fetch(`${BASE_URL}/api/reset`, { method: 'POST' });
+    const resetData = await resetRes.json();
+    assert(resetRes.status === 200, 'Reset returns 200 OK');
+    assert(resetData.success === true, 'Reset success is true');
 
     // ==========================================
     // SECTION 2: Model Context Protocol (MCP) Tests
+    // Testing All 9 Tools over SSE Transport
     // ==========================================
     console.log('\n=========================================');
-    console.log('🤖 PART 2: MCP PROTOCOL & TOOLS VERIFICATION');
+    console.log('🤖 PART 2: MCP PROTOCOL & 9 TOOLS VERIFICATION');
     console.log('=========================================');
 
-    console.log('\n[MCP Connection] Connecting client to /sse...');
+    console.log('\n[MCP Connection] Connecting to MCP Server via SSE...');
     const mcpClientTransport = new SSEClientTransport(new URL(`${BASE_URL}/sse`));
-    const mcpClient = new Client({ name: 'deliverease-test-suite', version: '2.0.0' }, { capabilities: {} });
+    const mcpClient = new Client({ name: 'deliverease-test-client', version: '1.0.0' }, { capabilities: {} });
     await mcpClient.connect(mcpClientTransport);
     assert(true, 'MCP Client successfully connected over SSE');
 
-    // 8. Tool Discovery
+    // 12. Tool Discovery: Exactly 9 Tools
     console.log('\n[MCP Tool Discovery] Listing registered tools...');
     const toolsResponse = await mcpClient.listTools();
     const toolNames = toolsResponse.tools.map(t => t.name);
+    console.log('Found MCP Tools:', toolNames);
+    assert(toolNames.length === 9, 'Exactly 9 custom MCP tools registered');
+    assert(toolNames.includes('get_preferences'), 'Tool 1: get_preferences');
+    assert(toolNames.includes('update_preferences'), 'Tool 2: update_preferences');
+    assert(toolNames.includes('get_authorized_recipient'), 'Tool 3: get_authorized_recipient');
+    assert(toolNames.includes('get_recovery_options'), 'Tool 4: get_recovery_options');
+    assert(toolNames.includes('create_recovery_plan'), 'Tool 5: create_recovery_plan');
+    assert(toolNames.includes('get_recovery_status'), 'Tool 6: get_recovery_status');
+    assert(toolNames.includes('create_notification'), 'Tool 7: create_notification');
+    assert(toolNames.includes('update_notification_status'), 'Tool 8: update_notification_status');
+    assert(toolNames.includes('get_notification_history'), 'Tool 9: get_notification_history');
 
-    assert(toolNames.includes('get_preferences'), 'Cap 1 Tool: get_preferences is registered');
-    assert(toolNames.includes('update_preferences'), 'Cap 1 Tool: update_preferences is registered');
-    assert(toolNames.includes('get_authorized_recipient'), 'Cap 1 Tool: get_authorized_recipient is registered');
-    assert(toolNames.includes('get_mode_policy'), 'Cap 2 Tool: get_mode_policy is registered');
-    assert(toolNames.includes('evaluate_delivery_action'), 'Cap 2 Tool: evaluate_delivery_action is registered');
-    assert(toolNames.includes('create_resolution_plan'), 'Cap 3 Tool: create_resolution_plan is registered');
-    assert(toolNames.includes('record_delivery_event'), 'Cap 3 Tool: record_delivery_event is registered');
-    assert(toolNames.includes('get_delivery_timeline'), 'Cap 3 Tool: get_delivery_timeline is registered');
-    assert(toolNames.length === 8, 'Exact 8 MCP tools registered');
-
-    // ------------------------------------------
-    // CAPABILITY 1 MCP TESTS
-    // ------------------------------------------
-    console.log('\n[MCP Cap 1 Test] get_preferences("DEMO001")...');
+    // 13. Capability 1: get_preferences
+    console.log('\n[MCP Tool 1] get_preferences("DEMO001")...');
     const cap1Pref = await mcpClient.callTool({ name: 'get_preferences', arguments: { customerId: 'DEMO001' } });
     const parsedCap1Pref = JSON.parse(cap1Pref.content[0].text);
-    assert(parsedCap1Pref.customerId === 'DEMO001', 'get_preferences returns customerId');
-    assert(parsedCap1Pref.preferences.length === 3, 'get_preferences returns 3 preferences');
+    assert(parsedCap1Pref.customerId === 'DEMO001', 'CustomerId is DEMO001');
+    assert(parsedCap1Pref.mode === 'ACTIVE', 'Initial mode is ACTIVE');
+    assert(parsedCap1Pref.preferences.length === 3, 'Contains 3 seed locations');
 
-    console.log('\n[MCP Cap 1 Test] get_authorized_recipient("DEMO001", "Home")...');
-    const cap1Rec = await mcpClient.callTool({ name: 'get_authorized_recipient', arguments: { customerId: 'DEMO001', location: 'Home' } });
-    const parsedCap1Rec = JSON.parse(cap1Rec.content[0].text);
-    assert(parsedCap1Rec.authorizationStatus === 'AUTHORIZED', 'Home recipient is AUTHORIZED');
-    assert(parsedCap1Rec.recipientName.includes('Mummy'), 'Mummy is verified recipient');
+    // 14. Capability 1: get_authorized_recipient (Home, Hostel, Office)
+    console.log('\n[MCP Tool 3] get_authorized_recipient for Home, Hostel, Office...');
+    const homeToolRes = await mcpClient.callTool({ name: 'get_authorized_recipient', arguments: { customerId: 'DEMO001', location: 'Home' } });
+    const parsedHome = JSON.parse(homeToolRes.content[0].text);
+    assert(parsedHome.authorizationStatus === 'AUTHORIZED', 'Home is AUTHORIZED');
+    assert(parsedHome.recipientName.includes('Mummy'), 'Mummy is authorized recipient');
 
-    // ------------------------------------------
-    // CAPABILITY 2 MCP TESTS
-    // ------------------------------------------
-    console.log('\n[MCP Cap 2 Test] get_mode_policy under ACTIVE mode...');
-    const activePolicyRes = await mcpClient.callTool({ name: 'get_mode_policy', arguments: { customerId: 'DEMO001' } });
-    const activePolicy = JSON.parse(activePolicyRes.content[0].text);
-    assert(activePolicy.currentMode === 'ACTIVE', 'Mode is ACTIVE');
-    assert(activePolicy.autonomousActionsAllowed === true, 'Autonomous actions allowed');
-    assert(activePolicy.proxyHandoffAllowed === true, 'Proxy handoff allowed');
+    const hostelToolRes = await mcpClient.callTool({ name: 'get_authorized_recipient', arguments: { customerId: 'DEMO001', location: 'Hostel' } });
+    const parsedHostel = JSON.parse(hostelToolRes.content[0].text);
+    assert(parsedHostel.authorizationStatus === 'AUTHORIZED', 'Hostel is AUTHORIZED (Self)');
 
-    console.log('\n[MCP Cap 2 Test] evaluate_delivery_action under ACTIVE mode...');
-    const evalActive1 = await mcpClient.callTool({
-      name: 'evaluate_delivery_action',
-      arguments: { customerId: 'DEMO001', situation: 'customer_unavailable' }
+    const officeToolRes = await mcpClient.callTool({ name: 'get_authorized_recipient', arguments: { customerId: 'DEMO001', location: 'Office' } });
+    const parsedOffice = JSON.parse(officeToolRes.content[0].text);
+    assert(parsedOffice.authorizationStatus === 'AUTHORIZED', 'Office is AUTHORIZED (Security Desk)');
+
+    // 15. Capability 1: Unauthorized location safety test
+    console.log('\n[MCP Tool 3] Safety check: get_authorized_recipient for unregistered location (Gym)...');
+    const gymToolRes = await mcpClient.callTool({ name: 'get_authorized_recipient', arguments: { customerId: 'DEMO001', location: 'Gym' } });
+    const parsedGym = JSON.parse(gymToolRes.content[0].text);
+    assert(parsedGym.authorizationStatus === 'NOT_AUTHORIZED', 'Safety rule: Unregistered location returns NOT_AUTHORIZED');
+    assert(parsedGym.recipient === null, 'Safety rule: recipient object is null');
+
+    // 16. Capability 2: get_recovery_options in ACTIVE mode (delivery failure, NDR, reschedule)
+    console.log('\n[MCP Tool 4] get_recovery_options for delivery failed in ACTIVE mode...');
+    const recOptFail = await mcpClient.callTool({
+      name: 'get_recovery_options',
+      arguments: { customerId: 'DEMO001', shipmentId: 'SHIP002', situation: 'delivery failed' }
     });
-    const parsedActive1 = JSON.parse(evalActive1.content[0].text);
-    assert(parsedActive1.decision === 'ALLOW', 'ACTIVE mode customer_unavailable -> ALLOW');
+    const parsedRecFail = JSON.parse(recOptFail.content[0].text);
+    assert(parsedRecFail.recommendedAction === 'REATTEMPT', 'ACTIVE mode delivery failed -> REATTEMPT');
 
-    const evalActive2 = await mcpClient.callTool({
-      name: 'evaluate_delivery_action',
-      arguments: { customerId: 'DEMO001', situation: 'recipient_unavailable' }
+    console.log('\n[MCP Tool 4] get_recovery_options for NDR...');
+    const recOptNdr = await mcpClient.callTool({
+      name: 'get_recovery_options',
+      arguments: { customerId: 'DEMO001', shipmentId: 'SHIP002', situation: 'NDR / non-delivery report' }
     });
-    const parsedActive2 = JSON.parse(evalActive2.content[0].text);
-    assert(parsedActive2.decision === 'ESCALATE', 'recipient_unavailable -> ESCALATE');
+    const parsedRecNdr = JSON.parse(recOptNdr.content[0].text);
+    assert(parsedRecNdr.recommendedAction === 'REATTEMPT', 'NDR -> REATTEMPT');
 
-    const evalActive3 = await mcpClient.callTool({
-      name: 'evaluate_delivery_action',
-      arguments: { customerId: 'DEMO001', situation: 'delivery_failed' }
+    console.log('\n[MCP Tool 4] get_recovery_options for customer asks for rescheduling...');
+    const recOptResched = await mcpClient.callTool({
+      name: 'get_recovery_options',
+      arguments: { customerId: 'DEMO001', shipmentId: 'SHIP002', situation: 'customer asks for rescheduling' }
     });
-    const parsedActive3 = JSON.parse(evalActive3.content[0].text);
-    assert(parsedActive3.decision === 'ESCALATE', 'delivery_failed -> ESCALATE');
+    const parsedRecResched = JSON.parse(recOptResched.content[0].text);
+    assert(parsedRecResched.recommendedAction === 'RESCHEDULE', 'Rescheduling situation -> RESCHEDULE');
 
-    // Test ASSIST mode
-    console.log('\n[MCP Cap 2 Test] Switching mode to ASSIST and evaluating policy...');
+    console.log('\n[MCP Tool 4] Safety check: Missing required delivery information...');
+    const recOptMissing = await mcpClient.callTool({
+      name: 'get_recovery_options',
+      arguments: { customerId: 'DEMO001', shipmentId: 'SHIP002', situation: 'required delivery information missing' }
+    });
+    const parsedRecMissing = JSON.parse(recOptMissing.content[0].text);
+    assert(parsedRecMissing.recommendedAction === 'ESCALATE', 'Safety rule: Missing info -> ESCALATE');
+    assert(parsedRecMissing.escalationRequired === true, 'Escalation required is true');
+
+    console.log('\n[MCP Tool 4] Recovery escalation: courier refuses handoff...');
+    const recOptRefuse = await mcpClient.callTool({
+      name: 'get_recovery_options',
+      arguments: { customerId: 'DEMO001', shipmentId: 'SHIP002', situation: 'courier refuses handoff' }
+    });
+    const parsedRecRefuse = JSON.parse(recOptRefuse.content[0].text);
+    assert(parsedRecRefuse.recommendedAction === 'ESCALATE', 'Courier refusal -> ESCALATE');
+    assert(parsedRecRefuse.escalationRequired === true, 'Escalation required for courier refusal');
+
+    // 17. Capability 2: ASSIST Mode Evaluation
+    console.log('\n[Shared State & Mode Test] Switching mode to ASSIST...');
     await mcpClient.callTool({ name: 'update_preferences', arguments: { customerId: 'DEMO001', mode: 'ASSIST' } });
 
-    const assistPolicyRes = await mcpClient.callTool({ name: 'get_mode_policy', arguments: { customerId: 'DEMO001' } });
-    const assistPolicy = JSON.parse(assistPolicyRes.content[0].text);
-    assert(assistPolicy.currentMode === 'ASSIST', 'Mode is updated to ASSIST');
-    assert(assistPolicy.autonomousActionsAllowed === false, 'Autonomous actions blocked in ASSIST mode');
-    assert(assistPolicy.interventionTrigger.includes('CUSTOMER_UNAVAILABLE'), 'Intervention trigger set');
-
-    const evalAssist = await mcpClient.callTool({
-      name: 'evaluate_delivery_action',
-      arguments: { customerId: 'DEMO001', situation: 'customer_unavailable' }
+    const recOptAssistUnavail = await mcpClient.callTool({
+      name: 'get_recovery_options',
+      arguments: { customerId: 'DEMO001', shipmentId: 'SHIP002', situation: 'customer unavailable' }
     });
-    const parsedAssist = JSON.parse(evalAssist.content[0].text);
-    assert(parsedAssist.decision === 'ALLOW_WITH_ASSIST', 'ASSIST mode customer_unavailable -> ALLOW_WITH_ASSIST');
+    const parsedAssistUnavail = JSON.parse(recOptAssistUnavail.content[0].text);
+    assert(parsedAssistUnavail.recommendedAction === 'CONTACT_RECIPIENT', 'ASSIST mode customer unavailable -> CONTACT_RECIPIENT');
 
-    // Test OFF mode
-    console.log('\n[MCP Cap 2 Test] Switching mode to OFF and evaluating policy...');
+    const recOptAssistNormal = await mcpClient.callTool({
+      name: 'get_recovery_options',
+      arguments: { customerId: 'DEMO001', shipmentId: 'SHIP002', situation: 'courier cannot access location' }
+    });
+    const parsedAssistNormal = JSON.parse(recOptAssistNormal.content[0].text);
+    assert(parsedAssistNormal.recommendedAction === 'CONTACT_CUSTOMER', 'ASSIST mode normal issue -> CONTACT_CUSTOMER first');
+
+    // 18. Capability 2 & 1: OFF Mode Evaluation
+    console.log('\n[Shared State & Mode Test] Switching mode to OFF...');
     await mcpClient.callTool({ name: 'update_preferences', arguments: { customerId: 'DEMO001', mode: 'OFF' } });
 
-    const offPolicyRes = await mcpClient.callTool({ name: 'get_mode_policy', arguments: { customerId: 'DEMO001' } });
-    const offPolicy = JSON.parse(offPolicyRes.content[0].text);
-    assert(offPolicy.currentMode === 'OFF', 'Mode is updated to OFF');
-    assert(offPolicy.autonomousActionsAllowed === false, 'Autonomous actions blocked in OFF mode');
-    assert(offPolicy.proxyHandoffAllowed === false, 'Proxy handoff blocked in OFF mode');
+    // Mode OFF blocks recipient lookup
+    const offRecipientRes = await mcpClient.callTool({ name: 'get_authorized_recipient', arguments: { customerId: 'DEMO001', location: 'Home' } });
+    const parsedOffRec = JSON.parse(offRecipientRes.content[0].text);
+    assert(parsedOffRec.authorizationStatus === 'NOT_AUTHORIZED', 'Safety check: Mode OFF blocks recipient authorization');
 
-    const evalOff = await mcpClient.callTool({
-      name: 'evaluate_delivery_action',
-      arguments: { customerId: 'DEMO001', situation: 'customer_unavailable' }
+    // Mode OFF blocks autonomous proxy handoff in recovery plan
+    const offPlanRes = await mcpClient.callTool({
+      name: 'create_recovery_plan',
+      arguments: {
+        customerId: 'DEMO001',
+        shipmentId: 'SHIP002',
+        situation: 'customer unavailable',
+        requestedAction: 'CONTACT_RECIPIENT'
+      }
     });
-    const parsedOff = JSON.parse(evalOff.content[0].text);
-    assert(parsedOff.decision === 'DENY', 'OFF mode customer_unavailable -> DENY proxy handoff');
+    const parsedOffPlan = JSON.parse(offPlanRes.content[0].text);
+    assert(parsedOffPlan.recoveryAction === 'ESCALATE', 'Safety check: Mode OFF forbids CONTACT_RECIPIENT and escalates');
+    assert(parsedOffPlan.escalationRequired === true, 'Escalation required is true');
 
-    // Safety check: Missing/Ambiguous situation produces ESCALATE
-    console.log('\n[MCP Cap 2 Test] Missing/Ambiguous situation evaluation...');
-    const evalAmbiguous = await mcpClient.callTool({
-      name: 'evaluate_delivery_action',
-      arguments: { customerId: 'DEMO001', situation: 'some_weird_unrecognized_situation' }
-    });
-    const parsedAmbiguous = JSON.parse(evalAmbiguous.content[0].text);
-    assert(parsedAmbiguous.decision === 'ESCALATE', 'Safety rule: Ambiguous situation produces ESCALATE');
-
-    // ------------------------------------------
-    // CAPABILITY 3 MCP TESTS
-    // ------------------------------------------
-    console.log('\n[MCP Cap 3 Test] create_resolution_plan...');
-    // Restore mode to ACTIVE for plan testing
+    // 19. Capability 2: create_recovery_plan & get_recovery_status
+    console.log('\n[MCP Tool 5 & 6] Restore mode to ACTIVE and create recovery plan...');
     await mcpClient.callTool({ name: 'update_preferences', arguments: { customerId: 'DEMO001', mode: 'ACTIVE' } });
 
-    const plan1 = await mcpClient.callTool({
-      name: 'create_resolution_plan',
+    const createPlanRes = await mcpClient.callTool({
+      name: 'create_recovery_plan',
       arguments: {
         customerId: 'DEMO001',
-        shipmentId: 'SHIP001',
-        situation: 'authorized recipient unavailable'
+        shipmentId: 'SHIP002',
+        situation: 'delivery attempt missed',
+        requestedAction: 'REATTEMPT'
       }
     });
-    const parsedPlan1 = JSON.parse(plan1.content[0].text);
-    assert(parsedPlan1.resolutionType === 'REATTEMPT_WITH_SECONDARY_CONTACT', 'Resolution type matches recipient unavailable');
-    assert(parsedPlan1.escalationRequired === true, 'Escalation required when recipient unavailable');
-    assert(Array.isArray(parsedPlan1.requiredInformation), 'Lists required information');
+    const parsedCreatePlan = JSON.parse(createPlanRes.content[0].text);
+    assert(parsedCreatePlan.success === true, 'create_recovery_plan returns success: true');
+    assert(parsedCreatePlan.recoveryAction === 'REATTEMPT', 'Recovery action is REATTEMPT');
 
-    const planCourierRefuse = await mcpClient.callTool({
-      name: 'create_resolution_plan',
+    const getPlanStatus = await mcpClient.callTool({
+      name: 'get_recovery_status',
+      arguments: { customerId: 'DEMO001', shipmentId: 'SHIP002' }
+    });
+    const parsedPlanStatus = JSON.parse(getPlanStatus.content[0].text);
+    assert(parsedPlanStatus.success === true, 'get_recovery_status returns success: true');
+    assert(parsedPlanStatus.status === 'PLAN_CREATED', 'Status is PLAN_CREATED');
+    assert(parsedPlanStatus.recoveryAction === 'REATTEMPT', 'Plan recoveryAction matches');
+
+    // 20. Capability 3: create_notification (CUSTOMER)
+    console.log('\n[MCP Tool 7] create_notification for CUSTOMER...');
+    const notifCustRes = await mcpClient.callTool({
+      name: 'create_notification',
       arguments: {
         customerId: 'DEMO001',
-        shipmentId: 'SHIP001',
-        situation: 'courier refuses handoff'
+        shipmentId: 'SHIP002',
+        recipientType: 'CUSTOMER',
+        notificationType: 'REATTEMPT_SCHEDULED',
+        message: 'Your delivery has been rescheduled for tomorrow 10:00 AM.'
       }
     });
-    const parsedPlanRefuse = JSON.parse(planCourierRefuse.content[0].text);
-    assert(parsedPlanRefuse.resolutionType === 'OTP_OR_ID_VERIFICATION_SUPPORT', 'Courier refusal generates verification plan');
-    assert(parsedPlanRefuse.priority === 'CRITICAL', 'Courier refusal priority is CRITICAL');
+    const parsedNotifCust = JSON.parse(notifCustRes.content[0].text);
+    assert(parsedNotifCust.status === 'PENDING', 'Notification status initialized to PENDING');
+    assert(parsedNotifCust.recipientType === 'CUSTOMER', 'Recipient type is CUSTOMER');
+    const mcpNotifId = parsedNotifCust.notificationId;
 
-    console.log('\n[MCP Cap 3 Test] record_delivery_event...');
-    const recordMcpRes = await mcpClient.callTool({
-      name: 'record_delivery_event',
+    // 21. Capability 3: create_notification (AUTHORIZED_RECIPIENT)
+    console.log('\n[MCP Tool 7] create_notification for AUTHORIZED_RECIPIENT...');
+    const notifAuthRes = await mcpClient.callTool({
+      name: 'create_notification',
       arguments: {
         customerId: 'DEMO001',
-        shipmentId: 'SHIP001',
-        eventType: 'COORDINATION_NOTE_ADDED',
-        details: { note: 'Voice agent coordinated with Hostel gate security desk.' }
+        shipmentId: 'SHIP002',
+        recipientType: 'AUTHORIZED_RECIPIENT',
+        notificationType: 'RECIPIENT_ALERT',
+        message: 'Please receive Aarav parcel SHIP002 at Home between 10:00 AM - 01:00 PM.'
       }
     });
-    const parsedRecordMcp = JSON.parse(recordMcpRes.content[0].text);
-    assert(parsedRecordMcp.success === true, 'MCP event recorded successfully');
-    assert(parsedRecordMcp.event.eventType === 'COORDINATION_NOTE_ADDED', 'Event type matches');
+    const parsedNotifAuth = JSON.parse(notifAuthRes.content[0].text);
+    assert(parsedNotifAuth.status === 'PENDING', 'Authorized recipient notification status is PENDING');
+    assert(parsedNotifAuth.recipientType === 'AUTHORIZED_RECIPIENT', 'Recipient type is AUTHORIZED_RECIPIENT');
 
-    // Safety rule test: cannot record DELIVERY_COMPLETED without connector confirmation
-    const safetyViolationRes = await mcpClient.callTool({
-      name: 'record_delivery_event',
+    // 22. Capability 3: update_notification_status (Safety check: connector required)
+    console.log('\n[MCP Tool 8] Safety check: Cannot mark DELIVERED without connector confirmation...');
+    const unconfirmedUpdate = await mcpClient.callTool({
+      name: 'update_notification_status',
       arguments: {
-        customerId: 'DEMO001',
-        shipmentId: 'SHIP001',
-        eventType: 'DELIVERY_COMPLETED',
-        details: { fakeStatus: 'Delivered' }
+        notificationId: mcpNotifId,
+        status: 'DELIVERED',
+        connector: ''
       }
     });
-    assert(safetyViolationRes.isError === true, 'Safety Rule: Tool errors when marking delivery complete without connector confirmation');
+    assert(unconfirmedUpdate.isError === true, 'Safety rule: Tool errors when connector is missing for DELIVERED status');
 
-    console.log('\n[MCP Cap 3 Test] get_delivery_timeline...');
-    const timelineMcpRes = await mcpClient.callTool({
-      name: 'get_delivery_timeline',
-      arguments: { customerId: 'DEMO001', shipmentId: 'SHIP001' }
+    console.log('\n[MCP Tool 8] Successful notification transition: PENDING -> SENT -> DELIVERED...');
+    const sentUpdate = await mcpClient.callTool({
+      name: 'update_notification_status',
+      arguments: {
+        notificationId: mcpNotifId,
+        status: 'SENT',
+        connector: 'WhatsApp-Gateway',
+        details: 'Dispatched via WhatsApp Business API'
+      }
     });
-    const parsedTimelineMcp = JSON.parse(timelineMcpRes.content[0].text);
-    assert(parsedTimelineMcp.success === true, 'Timeline query succeeds');
-    assert(parsedTimelineMcp.shipmentId === 'SHIP001', 'ShipmentId matches');
-    assert(parsedTimelineMcp.totalEvents >= 4, 'Timeline includes initial events plus newly recorded ones');
+    const parsedSent = JSON.parse(sentUpdate.content[0].text);
+    assert(parsedSent.status === 'SENT', 'Status updated to SENT');
+    assert(parsedSent.connector === 'WhatsApp-Gateway', 'Connector recorded as WhatsApp-Gateway');
 
-    // Shared State Test: REST endpoint sees new events recorded via MCP
-    console.log('\n[Shared State Test] Checking REST timeline for MCP recorded events...');
-    const restTimeline = await fetch(`${BASE_URL}/api/timeline?customerId=DEMO001&shipmentId=SHIP001`);
-    const restTimelineData = await restTimeline.json();
-    assert(restTimelineData.totalEvents === parsedTimelineMcp.totalEvents, 'Shared State: REST timeline matches MCP timeline exactly');
+    const deliveredUpdate = await mcpClient.callTool({
+      name: 'update_notification_status',
+      arguments: {
+        notificationId: mcpNotifId,
+        status: 'DELIVERED',
+        connector: 'WhatsApp-Gateway',
+        details: 'Read receipt confirmed by recipient'
+      }
+    });
+    const parsedDelivered = JSON.parse(deliveredUpdate.content[0].text);
+    assert(parsedDelivered.status === 'DELIVERED', 'Status updated to DELIVERED');
 
-    // Reset Test
-    console.log('\n[Reset Test] POST /api/reset...');
-    const resetRes = await fetch(`${BASE_URL}/api/reset`, { method: 'POST' });
-    const resetData = await resetRes.json();
-    assert(resetData.success === true, 'Reset succeeds');
-    assert(resetData.customers.includes('DEMO001'), 'DEMO001 is restored');
-    assert(resetData.shipments.includes('SHIP001'), 'SHIP001 is restored');
+    // 23. Capability 3: get_notification_history
+    console.log('\n[MCP Tool 9] get_notification_history for SHIP002...');
+    const historyRes = await mcpClient.callTool({
+      name: 'get_notification_history',
+      arguments: { customerId: 'DEMO001', shipmentId: 'SHIP002' }
+    });
+    const parsedHistory = JSON.parse(historyRes.content[0].text);
+    assert(parsedHistory.success === true, 'get_notification_history success is true');
+    assert(parsedHistory.totalNotifications >= 2, 'Contains at least 2 notifications for SHIP002');
+    assert(parsedHistory.history[0].notificationId !== undefined, 'Chronological history items contain notificationId');
 
+    // 24. Shared State Cross-Verification: REST endpoint sees MCP changes
+    console.log('\n[Shared State Test] Checking REST endpoint for MCP created plan & notification...');
+    const restPlanCheck = await fetch(`${BASE_URL}/api/recovery/status/SHIP002`);
+    const restPlanData = await restPlanCheck.json();
+    assert(restPlanData.success === true, 'Shared State: REST endpoint sees recovery plan created via MCP');
+    assert(restPlanData.recoveryAction === 'REATTEMPT', 'Shared State: Recovery action matches');
+
+    const restNotifCheck = await fetch(`${BASE_URL}/api/notifications/SHIP002?customerId=DEMO001`);
+    const restNotifData = await restNotifCheck.json();
+    assert(restNotifData.totalNotifications === parsedHistory.totalNotifications, 'Shared State: REST notification history matches MCP history');
+
+    // Close client cleanly
     await mcpClient.close();
     assert(true, 'MCP Client closed cleanly');
 
@@ -349,7 +429,7 @@ async function runTests() {
   } finally {
     server.close(() => {
       console.log('\n=========================================');
-      console.log(`🏁 All 3 Capabilities Tests Complete: ${passedCount} Passed, ${failedCount} Failed`);
+      console.log(`🏁 Complete Test Suite: ${passedCount} Passed, ${failedCount} Failed`);
       console.log('=========================================');
       process.exit(failedCount > 0 ? 1 : 0);
     });

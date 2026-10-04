@@ -26,14 +26,18 @@ app.use((req, res, next) => {
 });
 
 // ==========================================
-// In-Memory Data Stores & Seed Data
+// In-Memory Shared Data Store (3 Capabilities)
 // ==========================================
 const VALID_MODES = ['ACTIVE', 'ASSIST', 'OFF'];
 const VALID_AUTH_STATUSES = ['AUTHORIZED', 'NOT_AUTHORIZED'];
+const ALLOWED_RECOVERY_ACTIONS = ['REATTEMPT', 'RESCHEDULE', 'CONTACT_RECIPIENT', 'CONTACT_CUSTOMER', 'ESCALATE', 'NO_ACTION'];
+const ALLOWED_NOTIFICATION_STATUSES = ['PENDING', 'SENT', 'DELIVERED', 'FAILED'];
 
-const getInitialSeedCustomers = () => ({
+// Capability 1: Demo Customers & Preferences
+const getInitialSeedData = () => ({
   DEMO001: {
     customerId: 'DEMO001',
+    customerName: 'Aarav Sharma',
     mode: 'ACTIVE',
     preferences: [
       {
@@ -46,7 +50,7 @@ const getInitialSeedCustomers = () => ({
       },
       {
         location: 'Hostel',
-        recipientName: 'Aarav Sharma',
+        recipientName: 'Aarav Sharma (Self)',
         recipientRelation: 'Self',
         recipientPhone: '+919812345678',
         preferredTime: '06:00 PM - 09:00 PM',
@@ -64,71 +68,49 @@ const getInitialSeedCustomers = () => ({
   }
 });
 
-const getInitialSeedShipments = () => ({
+// Capability 2: Recovery Plans Store
+const getInitialRecoveryData = () => ({
   SHIP001: {
     shipmentId: 'SHIP001',
     customerId: 'DEMO001',
-    location: 'Home',
-    status: 'OUT_FOR_DELIVERY',
-    courierPartner: 'ExpressLogistics',
-    trackingNumber: 'EXP-889102'
-  },
-  SHIP002: {
-    shipmentId: 'SHIP002',
-    customerId: 'DEMO001',
-    location: 'Office',
-    status: 'OUT_FOR_DELIVERY',
-    courierPartner: 'FastTrack',
-    trackingNumber: 'FT-441209'
+    situation: 'recipient unavailable',
+    recoveryAction: 'CONTACT_CUSTOMER',
+    status: 'PLAN_CREATED',
+    nextStep: 'Initiate outbound customer voice/SMS outreach for delivery coordination.',
+    requiredInformation: [],
+    escalationRequired: false,
+    reason: 'Authorized recipient was unavailable at location. Reverting to customer.',
+    createdAt: '2026-10-04T09:00:00.000Z'
   }
 });
 
-const getInitialSeedTimeline = () => ([
+// Capability 3: Notifications Store
+let notificationCounter = 1;
+const getInitialNotificationsData = () => ([
   {
-    eventId: 'EVT-SHIP001-01',
-    timestamp: '2026-10-04T07:30:00.000Z',
+    notificationId: 'NOTIF-001',
     customerId: 'DEMO001',
     shipmentId: 'SHIP001',
-    eventType: 'SHIPMENT_RECEIVED',
-    details: { note: 'Package received at regional hub', location: 'Hub North' }
-  },
-  {
-    eventId: 'EVT-SHIP001-02',
-    timestamp: '2026-10-04T08:15:00.000Z',
-    customerId: 'DEMO001',
-    shipmentId: 'SHIP001',
-    eventType: 'PREFERENCE_EVALUATED',
-    details: { location: 'Home', mode: 'ACTIVE', recipient: 'Sunita Sharma (Mummy)' }
-  },
-  {
-    eventId: 'EVT-SHIP001-03',
-    timestamp: '2026-10-04T09:00:00.000Z',
-    customerId: 'DEMO001',
-    shipmentId: 'SHIP001',
-    eventType: 'OUT_FOR_DELIVERY',
-    details: { courierName: 'Vikram Singh', vehicle: 'Two-Wheeler' }
-  },
-  {
-    eventId: 'EVT-SHIP002-01',
-    timestamp: '2026-10-04T08:00:00.000Z',
-    customerId: 'DEMO001',
-    shipmentId: 'SHIP002',
-    eventType: 'SHIPMENT_RECEIVED',
-    details: { note: 'Package received at city hub', location: 'Hub South' }
-  },
-  {
-    eventId: 'EVT-SHIP002-02',
-    timestamp: '2026-10-04T08:45:00.000Z',
-    customerId: 'DEMO001',
-    shipmentId: 'SHIP002',
-    eventType: 'PREFERENCE_EVALUATED',
-    details: { location: 'Office', mode: 'ACTIVE', recipient: 'Ramesh Kumar (Security Desk)' }
+    recipientType: 'CUSTOMER',
+    notificationType: 'ARRIVING_SOON',
+    message: 'Your DeliverEase package SHIP001 is arriving soon.',
+    status: 'DELIVERED',
+    connector: 'Twilio-SMS',
+    details: 'Delivered via Twilio connector',
+    createdAt: '2026-10-04T09:15:00.000Z',
+    updatedAt: '2026-10-04T09:15:30.000Z'
   }
 ]);
 
-let customersStore = getInitialSeedCustomers();
-let shipmentsStore = getInitialSeedShipments();
-let deliveryTimelineStore = getInitialSeedTimeline();
+// Shared State Instances
+let customersStore = getInitialSeedData();
+let recoveryStore = getInitialRecoveryData();
+let notificationsStore = getInitialNotificationsData();
+
+function generateNotificationId() {
+  notificationCounter += 1;
+  return `NOTIF-${String(notificationCounter).padStart(3, '0')}`;
+}
 
 // ==========================================
 // Helper / Validation Functions
@@ -146,315 +128,132 @@ function validatePreferenceItem(pref) {
   return null;
 }
 
-// ==========================================
-// Capability 2: Mode & Policy Logic
-// ==========================================
-function evaluateModePolicy(customer) {
-  switch (customer.mode) {
-    case 'ACTIVE':
-      return {
-        customerId: customer.customerId,
-        currentMode: 'ACTIVE',
-        autonomousActionsAllowed: true,
-        interventionTrigger: 'AUTONOMOUS_COORDINATION',
-        proxyHandoffAllowed: true,
-        explanation: 'Agent may autonomously coordinate delivery within saved permissions, contact/coordinate with courier and authorized recipient without interrupting customer.'
-      };
-    case 'ASSIST':
-      return {
-        customerId: customer.customerId,
-        currentMode: 'ASSIST',
-        autonomousActionsAllowed: false,
-        interventionTrigger: 'CUSTOMER_UNAVAILABLE_OR_UNRESPONSIVE',
-        proxyHandoffAllowed: true,
-        explanation: 'Customer remains primary receiver. Agent may intervene only when customer is unavailable, unreachable, or unresponsive. Proactive handover is blocked until Assist rule is triggered.'
-      };
-    case 'OFF':
-    default:
-      return {
-        customerId: customer.customerId,
-        currentMode: 'OFF',
-        autonomousActionsAllowed: false,
-        interventionTrigger: 'NONE_DISABLED',
-        proxyHandoffAllowed: false,
-        explanation: 'Agent must not autonomously coordinate handoff or proxy receipt. Can only provide delivery status/information to customer; proxy delegation is disabled.'
-      };
-  }
-}
+// Helper to evaluate recovery options based on situation and shared mode
+function evaluateRecoveryOptions(customer, shipmentId, situation) {
+  const normSituation = (situation || '').trim().toLowerCase();
 
-function evaluateActionDecision(customer, situation) {
-  if (!situation || typeof situation !== 'string' || !situation.trim()) {
+  // Safety rule: Missing required information => ESCALATE
+  if (!normSituation || normSituation.includes('missing') || normSituation === 'unknown') {
     return {
-      decision: 'ESCALATE',
-      reason: 'Missing situation information. DeliverEase safety rules prohibit guessing missing context.',
-      allowedActions: ['request_clarification'],
-      blockedActions: ['autonomous_action'],
-      currentMode: customer.mode,
-      situation: ''
+      shipmentId,
+      situation: situation || 'UNKNOWN',
+      availableActions: ['ESCALATE'],
+      recommendedAction: 'ESCALATE',
+      reason: 'Required delivery information is missing or ambiguous. Escalation required for human safety check.',
+      escalationRequired: true
     };
   }
 
-  const s = situation.trim().toLowerCase().replace(/[\s-]+/g, '_');
-  const mode = customer.mode;
-
-  // Case 1: Customer is available
-  if (s === 'customer_available') {
+  // Safety rule: Customer mode OFF prevents autonomous proxy handoff
+  if (customer.mode === 'OFF') {
     return {
-      decision: 'ALLOW',
-      reason: 'Customer is available for direct delivery handover.',
-      allowedActions: ['direct_customer_delivery', 'request_delivery_confirmation'],
-      blockedActions: [],
-      currentMode: mode,
-      situation
+      shipmentId,
+      situation,
+      availableActions: ['CONTACT_CUSTOMER', 'RESCHEDULE', 'ESCALATE'],
+      recommendedAction: 'CONTACT_CUSTOMER',
+      reason: 'Customer delivery mode is OFF. Autonomous proxy delegation is disabled; must contact customer directly or escalate.',
+      escalationRequired: normSituation.includes('refuse') || normSituation.includes('ndr')
     };
   }
 
-  // Case 2: Customer is unavailable or phone is silent
-  if (s === 'customer_unavailable' || s === 'phone_silent') {
-    if (mode === 'ACTIVE') {
+  // ASSIST Mode: Customer handles delivery unless unavailable/unresponsive
+  if (customer.mode === 'ASSIST') {
+    if (normSituation.includes('customer unavailable') || normSituation.includes('customer unreachable')) {
       return {
-        decision: 'ALLOW',
-        reason: 'Customer is unavailable. Mode ACTIVE permits autonomous coordination with registered proxy recipient.',
-        allowedActions: ['contact_authorized_recipient', 'coordinate_proxy_handoff', 'record_audit_event'],
-        blockedActions: [],
-        currentMode: mode,
-        situation
-      };
-    } else if (mode === 'ASSIST') {
-      return {
-        decision: 'ALLOW_WITH_ASSIST',
-        reason: 'Assist rule triggered: customer is unavailable or unresponsive. Agent is authorized to engage proxy recipient.',
-        allowedActions: ['verify_customer_unreachable', 'contact_authorized_recipient', 'notify_customer_of_handoff'],
-        blockedActions: ['silent_unnotified_handoff'],
-        currentMode: mode,
-        situation
-      };
-    } else {
-      return {
-        decision: 'DENY',
-        reason: 'Customer is unavailable and delivery mode is OFF. Proxy delegation is prohibited.',
-        allowedActions: ['notify_customer_status', 'record_delivery_attempt'],
-        blockedActions: ['coordinate_proxy_handoff', 'delegate_to_proxy'],
-        currentMode: mode,
-        situation
+        shipmentId,
+        situation,
+        availableActions: ['CONTACT_RECIPIENT', 'REATTEMPT', 'RESCHEDULE', 'ESCALATE'],
+        recommendedAction: 'CONTACT_RECIPIENT',
+        reason: 'Customer is unavailable in ASSIST mode. Escalating routine intervention to authorized trusted recipient.',
+        escalationRequired: false
       };
     }
-  }
-
-  // Case 3: Authorized recipient is available
-  if (s === 'authorized_recipient_available') {
-    if (mode === 'ACTIVE') {
-      return {
-        decision: 'ALLOW',
-        reason: 'Authorized recipient is available at delivery location under ACTIVE mode.',
-        allowedActions: ['coordinate_proxy_handoff', 'verify_recipient_id', 'complete_handover_with_connector'],
-        blockedActions: [],
-        currentMode: mode,
-        situation
-      };
-    } else if (mode === 'ASSIST') {
-      return {
-        decision: 'ALLOW_WITH_ASSIST',
-        reason: 'Recipient is available; Assist mode permits handover provided customer was confirmed unreachable.',
-        allowedActions: ['confirm_customer_nonresponse', 'coordinate_proxy_handoff', 'send_handoff_notification'],
-        blockedActions: ['unconditional_bypass_of_customer'],
-        currentMode: mode,
-        situation
-      };
-    } else {
-      return {
-        decision: 'DENY',
-        reason: 'Delivery mode is set to OFF. Proxy receipt is prohibited even if authorized recipient is available.',
-        allowedActions: ['deliver_to_customer_only'],
-        blockedActions: ['handoff_to_proxy'],
-        currentMode: mode,
-        situation
-      };
-    }
-  }
-
-  // Case 4: Recipient is unavailable
-  if (s === 'recipient_unavailable' || s === 'authorized_recipient_unavailable') {
     return {
-      decision: 'ESCALATE',
-      reason: 'Authorized recipient is unavailable. DeliverEase safety rules prohibit inventing recipients or leaving parcel unattended.',
-      allowedActions: ['notify_customer', 'initiate_rescheduling', 'record_escalation_event'],
-      blockedActions: ['unauthorized_handoff', 'leave_unattended'],
-      currentMode: mode,
-      situation
+      shipmentId,
+      situation,
+      availableActions: ['CONTACT_CUSTOMER', 'RESCHEDULE', 'REATTEMPT', 'ESCALATE'],
+      recommendedAction: 'CONTACT_CUSTOMER',
+      reason: 'ASSIST mode requires consulting the primary customer first before taking proxy actions.',
+      escalationRequired: false
     };
   }
 
-  // Case 5: Delivery attempt failed
-  if (s === 'delivery_failed' || s === 'delivery_attempt_failed') {
+  // ACTIVE Mode: Autonomous coordination within permissions
+  if (normSituation.includes('recipient unavailable')) {
     return {
-      decision: 'ESCALATE',
-      reason: 'Delivery attempt failed. Requires exception logging, root-cause recording, and carrier reattempt plan.',
-      allowedActions: ['record_failure_event', 'notify_parties', 'create_resolution_plan'],
-      blockedActions: ['claim_delivery_completed'],
-      currentMode: mode,
-      situation
+      shipmentId,
+      situation,
+      availableActions: ['CONTACT_CUSTOMER', 'RESCHEDULE', 'REATTEMPT', 'ESCALATE'],
+      recommendedAction: 'CONTACT_CUSTOMER',
+      reason: 'Authorized recipient was not available at location. Contacting customer for fallback direction.',
+      escalationRequired: false
     };
   }
 
-  // Case 6: Courier access issues
-  if (s.includes('cannot_access') || s.includes('access_location')) {
+  if (normSituation.includes('refuse') || normSituation.includes('courier refuses handoff')) {
     return {
-      decision: 'ESCALATE',
-      reason: 'Courier cannot physically access delivery location (gate, security, or building entrance).',
-      allowedActions: ['contact_building_security', 'request_gate_pass_code', 'contact_customer'],
-      blockedActions: ['abandon_delivery'],
-      currentMode: mode,
-      situation
+      shipmentId,
+      situation,
+      availableActions: ['CONTACT_CUSTOMER', 'ESCALATE'],
+      recommendedAction: 'ESCALATE',
+      reason: 'Courier refuses proxy handoff. Requires verification escalation or dispatch supervisor clearance.',
+      escalationRequired: true
     };
   }
 
-  // Case 7: Courier refuses handoff
-  if (s.includes('refuses_handoff') || s.includes('courier_refuses')) {
+  if (normSituation.includes('cannot access') || normSituation.includes('access location')) {
     return {
-      decision: 'ESCALATE',
-      reason: 'Courier requires additional authorization verification before releasing parcel to proxy recipient.',
-      allowedActions: ['provide_verification_otp', 'bridge_voice_call_with_customer', 'contact_dispatch'],
-      blockedActions: ['force_handoff'],
-      currentMode: mode,
-      situation
+      shipmentId,
+      situation,
+      availableActions: ['CONTACT_RECIPIENT', 'CONTACT_CUSTOMER', 'RESCHEDULE', 'ESCALATE'],
+      recommendedAction: 'CONTACT_RECIPIENT',
+      reason: 'Courier cannot access location. Contacting authorized proxy recipient to assist with gate/entry access.',
+      escalationRequired: false
     };
   }
 
-  // Fallback for Ambiguous / Missing Situation
+  if (normSituation.includes('reschedul') || normSituation.includes('timing')) {
+    return {
+      shipmentId,
+      situation,
+      availableActions: ['RESCHEDULE', 'REATTEMPT', 'CONTACT_CUSTOMER', 'ESCALATE'],
+      recommendedAction: 'RESCHEDULE',
+      reason: 'Customer/courier delivery timing conflict. Rescheduling delivery slot is recommended.',
+      escalationRequired: false
+    };
+  }
+
+  if (normSituation.includes('reattempt') || normSituation.includes('failed') || normSituation.includes('ndr') || normSituation.includes('missed')) {
+    return {
+      shipmentId,
+      situation,
+      availableActions: ['REATTEMPT', 'RESCHEDULE', 'CONTACT_CUSTOMER', 'ESCALATE'],
+      recommendedAction: 'REATTEMPT',
+      reason: 'Delivery attempt failed or missed. Scheduling next-day courier reattempt.',
+      escalationRequired: false
+    };
+  }
+
+  // Fallback for customer unavailable in ACTIVE mode
+  if (normSituation.includes('customer unavailable')) {
+    return {
+      shipmentId,
+      situation,
+      availableActions: ['CONTACT_RECIPIENT', 'RESCHEDULE', 'REATTEMPT', 'ESCALATE'],
+      recommendedAction: 'CONTACT_RECIPIENT',
+      reason: 'Customer unavailable in ACTIVE mode. Autonomous proxy recipient coordination initiated.',
+      escalationRequired: false
+    };
+  }
+
+  // General safe fallback
   return {
-    decision: 'ESCALATE',
-    reason: `Ambiguous or unrecognized situation "${situation}". DeliverEase safety policy prohibits guessing missing context.`,
-    allowedActions: ['request_clarification', 'halt_autonomous_action'],
-    blockedActions: ['autonomous_delegation', 'claim_completion'],
-    currentMode: mode,
-    situation
-  };
-}
-
-// ==========================================
-// Capability 3: Escalation & Resolution Plan Logic
-// ==========================================
-function buildResolutionPlan(customerId, shipmentId, situation, customer) {
-  const s = (situation || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
-  const mode = customer ? customer.mode : 'ACTIVE';
-
-  if (!situation || !situation.trim()) {
-    return {
-      resolutionType: 'ESCALATE_MISSING_DATA',
-      priority: 'CRITICAL',
-      nextRecommendedAction: 'Halt autonomous action and request missing situation parameters.',
-      requiredInformation: ['situation_clarification'],
-      escalationRequired: true,
-      explanation: 'Safety rule enforced: DeliverEase never guesses missing information. Ambiguous situations must escalate.'
-    };
-  }
-
-  if (s === 'authorized_recipient_unavailable' || s === 'recipient_unavailable') {
-    return {
-      resolutionType: 'REATTEMPT_WITH_SECONDARY_CONTACT',
-      priority: 'HIGH',
-      nextRecommendedAction: 'Contact customer directly for alternative instructions or schedule delivery reattempt during preferred window.',
-      requiredInformation: ['customer_alternative_preference', 'reattempt_time_window'],
-      escalationRequired: true,
-      explanation: 'Authorized recipient was unreachable or not present at designated location. Cannot invent another recipient.'
-    };
-  }
-
-  if (s === 'customer_unavailable') {
-    if (mode === 'ACTIVE') {
-      return {
-        resolutionType: 'DELEGATE_TO_AUTHORIZED_RECIPIENT',
-        priority: 'MEDIUM',
-        nextRecommendedAction: 'Route delivery handover to verified authorized proxy recipient for current location.',
-        requiredInformation: ['verified_location', 'recipient_readiness_confirmation'],
-        escalationRequired: false,
-        explanation: 'Customer is unavailable, but delivery mode is ACTIVE with saved proxy recipient permissions.'
-      };
-    } else if (mode === 'ASSIST') {
-      return {
-        resolutionType: 'ASSIST_TRIGGERED_PROXY_DELEGATION',
-        priority: 'MEDIUM',
-        nextRecommendedAction: 'Engage authorized recipient after logging customer non-response; send notification to customer.',
-        requiredInformation: ['customer_notification_dispatch', 'recipient_readiness'],
-        escalationRequired: false,
-        explanation: 'Assist mode triggered due to primary customer non-response.'
-      };
-    } else {
-      return {
-        resolutionType: 'SCHEDULE_REATTEMPT_DIRECT_ONLY',
-        priority: 'HIGH',
-        nextRecommendedAction: 'Hold shipment at delivery hub and schedule direct customer reattempt when customer is reachable. Proxy handoff is disabled.',
-        requiredInformation: ['customer_availability_slot'],
-        escalationRequired: true,
-        explanation: 'Customer delivery mode is OFF. Delegation to proxy is prohibited.'
-      };
-    }
-  }
-
-  if (s.includes('cannot_access') || s.includes('access_location')) {
-    return {
-      resolutionType: 'GATE_ACCESS_COORDINATION',
-      priority: 'HIGH',
-      nextRecommendedAction: 'Contact building security/gate or authorized recipient to grant courier physical entrance.',
-      requiredInformation: ['gate_pass_code', 'building_security_contact'],
-      escalationRequired: true,
-      explanation: 'Courier is physically blocked from reaching the doorstep or designated delivery point.'
-    };
-  }
-
-  if (s.includes('refuses_handoff') || s.includes('courier_refuses')) {
-    return {
-      resolutionType: 'OTP_OR_ID_VERIFICATION_SUPPORT',
-      priority: 'CRITICAL',
-      nextRecommendedAction: 'Provide courier with verified authorization token, OTP, or direct voice bridge with customer to validate proxy identity.',
-      requiredInformation: ['delivery_otp', 'government_id_type_for_proxy'],
-      escalationRequired: true,
-      explanation: 'Courier requires official courier policy verification before handing parcel to authorized recipient.'
-    };
-  }
-
-  if (s.includes('delivery_failed') || s === 'delivery_attempt_failed') {
-    return {
-      resolutionType: 'FAILED_ATTEMPT_RECOVERY',
-      priority: 'HIGH',
-      nextRecommendedAction: 'Log failed attempt reason in audit timeline and arrange carrier next-day slot or pickup point redirect.',
-      requiredInformation: ['carrier_failure_code', 'customer_reschedule_preference'],
-      escalationRequired: true,
-      explanation: 'Delivery attempt failed without handover. Safety rules prohibit claiming completion.'
-    };
-  }
-
-  if (s.includes('reattempt') || s.includes('rescheduling')) {
-    return {
-      resolutionType: 'SCHEDULED_REATTEMPT',
-      priority: 'MEDIUM',
-      nextRecommendedAction: "Reserve courier reattempt window matching customer's preferred delivery time.",
-      requiredInformation: ['rescheduled_date', 'preferred_time_slot'],
-      escalationRequired: false,
-      explanation: 'Coordination plan created for rescheduled delivery attempt.'
-    };
-  }
-
-  if (s.includes('connector') || s.includes('tool_failure')) {
-    return {
-      resolutionType: 'CARRIER_SYSTEM_FALLBACK',
-      priority: 'CRITICAL',
-      nextRecommendedAction: 'Fallback to direct carrier phone helpline or manual dispatch; log connector failure event in timeline.',
-      requiredInformation: ['carrier_dispatch_ticket_id'],
-      escalationRequired: true,
-      explanation: 'Safety rule enforced: Never claim SMS/call/update succeeded without connector confirmation.'
-    };
-  }
-
-  // Default Ambiguous Situation
-  return {
-    resolutionType: 'ESCALATE_UNKNOWN_SITUATION',
-    priority: 'HIGH',
-    nextRecommendedAction: 'Halt autonomous actions and route case to customer coordination agent.',
-    requiredInformation: ['operational_clarification'],
-    escalationRequired: true,
-    explanation: 'Missing or ambiguous information must produce ESCALATE to ensure delivery integrity.'
+    shipmentId,
+    situation,
+    availableActions: ['CONTACT_CUSTOMER', 'REATTEMPT', 'ESCALATE', 'NO_ACTION'],
+    recommendedAction: 'CONTACT_CUSTOMER',
+    reason: 'Standard delivery issue. Contacting customer for clarification.',
+    escalationRequired: false
   };
 }
 
@@ -464,17 +263,17 @@ function buildResolutionPlan(customerId, shipmentId, situation, customer) {
 function createDeliverEaseMcpServer() {
   const mcpServer = new McpServer({
     name: 'deliverease-mcp-server',
-    version: '2.0.0'
+    version: '1.0.0'
   });
 
   // ------------------------------------------
   // CAPABILITY 1 TOOLS
   // ------------------------------------------
 
-  // 1. get_preferences
+  // Tool 1: get_preferences(customerId)
   mcpServer.tool(
     'get_preferences',
-    'Retrieve customer delivery mode (ACTIVE | ASSIST | OFF) and saved location preferences.',
+    'Return the customer current delivery mode (ACTIVE | ASSIST | OFF) and saved location preferences.',
     {
       customerId: z.string().describe('Customer identifier (e.g. DEMO001)')
     },
@@ -512,13 +311,13 @@ function createDeliverEaseMcpServer() {
     }
   );
 
-  // 2. update_preferences
+  // Tool 2: update_preferences(customerId, mode)
   mcpServer.tool(
     'update_preferences',
-    'Update delivery mode (ACTIVE, ASSIST, OFF) for a customer.',
+    'Update delivery mode (ACTIVE, ASSIST, OFF) for a customer in shared state.',
     {
       customerId: z.string().describe('Customer identifier (e.g. DEMO001)'),
-      mode: z.enum(['ACTIVE', 'ASSIST', 'OFF']).describe('Delivery mode: ACTIVE, ASSIST, or OFF')
+      mode: z.enum(['ACTIVE', 'ASSIST', 'OFF']).describe('New delivery mode: ACTIVE, ASSIST, or OFF')
     },
     async ({ customerId, mode }) => {
       const key = customerId ? customerId.trim().toUpperCase() : '';
@@ -557,7 +356,7 @@ function createDeliverEaseMcpServer() {
     }
   );
 
-  // 3. get_authorized_recipient
+  // Tool 3: get_authorized_recipient(customerId, location)
   mcpServer.tool(
     'get_authorized_recipient',
     'Query authorized recipient for a customer delivery location following safety rules. Never invents recipients; returns clear NOT_AUTHORIZED if no recipient is authorized or mode is OFF.',
@@ -607,7 +406,7 @@ function createDeliverEaseMcpServer() {
         };
       }
 
-      // Location match
+      // Location match (case-insensitive)
       const matchedPref = customer.preferences.find(
         p => p.location.trim().toLowerCase() === cleanLocation.toLowerCase()
       );
@@ -632,7 +431,7 @@ function createDeliverEaseMcpServer() {
         };
       }
 
-      // Authorized recipient response - only necessary coordination data
+      // Authorized recipient response - minimal necessary coordination data
       return {
         content: [
           {
@@ -661,170 +460,232 @@ function createDeliverEaseMcpServer() {
   );
 
   // ------------------------------------------
-  // CAPABILITY 2 TOOLS
+  // CAPABILITY 2 TOOLS (Delivery Recovery)
   // ------------------------------------------
 
-  // 4. get_mode_policy
+  // Tool 4: get_recovery_options(customerId, shipmentId, situation)
   mcpServer.tool(
-    'get_mode_policy',
-    'Return customer current delivery mode policy, autonomous action permissions, intervention triggers, and handoff allowances.',
+    'get_recovery_options',
+    'Evaluate delivery problem and return available actions, recommended action, and escalation status based on shared customer mode.',
     {
-      customerId: z.string().describe('Customer identifier (e.g. DEMO001)')
-    },
-    async ({ customerId }) => {
-      const key = customerId ? customerId.trim().toUpperCase() : '';
-      const customer = customersStore[key];
-      if (!customer) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({
-                success: false,
-                error: `Customer not found with ID '${customerId}'.`
-              })
-            }
-          ]
-        };
-      }
-
-      const policy = evaluateModePolicy(customer);
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify(policy, null, 2)
-          }
-        ]
-      };
-    }
-  );
-
-  // 5. evaluate_delivery_action
-  mcpServer.tool(
-    'evaluate_delivery_action',
-    'Evaluate delivery situation against customer mode policy to determine if action is ALLOW, ALLOW_WITH_ASSIST, DENY, or ESCALATE.',
-    {
-      customerId: z.string().describe('Customer identifier (e.g. DEMO001)'),
-      situation: z.string().describe('Delivery situation (e.g. customer_unavailable, customer_available, phone_silent, authorized_recipient_available, recipient_unavailable, delivery_failed)')
-    },
-    async ({ customerId, situation }) => {
-      const key = customerId ? customerId.trim().toUpperCase() : '';
-      const customer = customersStore[key];
-      if (!customer) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({
-                decision: 'ESCALATE',
-                reason: `Customer not found with ID '${customerId}'. Cannot guess policy for unknown customer.`,
-                allowedActions: ['verify_customer_registration'],
-                blockedActions: ['autonomous_action']
-              })
-            }
-          ]
-        };
-      }
-
-      const evaluation = evaluateActionDecision(customer, situation);
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify(evaluation, null, 2)
-          }
-        ]
-      };
-    }
-  );
-
-  // ------------------------------------------
-  // CAPABILITY 3 TOOLS
-  // ------------------------------------------
-
-  // 6. create_resolution_plan
-  mcpServer.tool(
-    'create_resolution_plan',
-    'Create structured resolution plan for delivery exceptions and non-standard situations without directly executing courier actions.',
-    {
-      customerId: z.string().describe('Customer identifier (e.g. DEMO001)'),
-      shipmentId: z.string().describe('Shipment tracking identifier (e.g. SHIP001, SHIP002)'),
-      situation: z.string().describe('Exception situation description')
+      customerId: z.string().describe('Customer ID (e.g. DEMO001)'),
+      shipmentId: z.string().describe('Shipment / tracking ID (e.g. SHIP001)'),
+      situation: z.string().describe('Delivery exception situation (e.g. delivery failed, recipient unavailable, courier refuses handoff)')
     },
     async ({ customerId, shipmentId, situation }) => {
-      const key = customerId ? customerId.trim().toUpperCase() : '';
-      const customer = customersStore[key];
-      const plan = buildResolutionPlan(customerId, shipmentId, situation, customer);
+      const cleanCustomerId = customerId ? customerId.trim().toUpperCase() : '';
+      const cleanShipmentId = shipmentId ? shipmentId.trim() : '';
 
-      // Record event in timeline
-      const eventId = `EVT-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
-      deliveryTimelineStore.push({
-        eventId,
-        timestamp: new Date().toISOString(),
-        customerId: key || customerId,
-        shipmentId: shipmentId.toUpperCase(),
-        eventType: 'RESOLUTION_PLAN_CREATED',
-        details: {
-          situation,
-          resolutionType: plan.resolutionType,
-          priority: plan.priority,
-          escalationRequired: plan.escalationRequired
-        }
-      });
+      const customer = customersStore[cleanCustomerId];
+      if (!customer) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                shipmentId: cleanShipmentId,
+                situation,
+                availableActions: ['ESCALATE'],
+                recommendedAction: 'ESCALATE',
+                reason: `Customer '${customerId}' not found. Cannot determine recovery options.`,
+                escalationRequired: true
+              }, null, 2)
+            }
+          ]
+        };
+      }
 
+      const options = evaluateRecoveryOptions(customer, cleanShipmentId, situation);
       return {
         content: [
           {
             type: 'text',
-            text: JSON.stringify(plan, null, 2)
+            text: JSON.stringify(options, null, 2)
           }
         ]
       };
     }
   );
 
-  // 7. record_delivery_event
+  // Tool 5: create_recovery_plan(customerId, shipmentId, situation, requestedAction)
   mcpServer.tool(
-    'record_delivery_event',
-    'Store a timestamped delivery decision or coordination event in the immutable in-memory audit timeline.',
+    'create_recovery_plan',
+    'Create and record a structured recovery plan for a delivery problem in shared state following safety rules.',
     {
-      customerId: z.string().describe('Customer identifier (e.g. DEMO001)'),
-      shipmentId: z.string().describe('Shipment identifier (e.g. SHIP001)'),
-      eventType: z.string().describe('Event category (e.g. ACTION_EVALUATED, COURIER_CONTACTED, HANDOFF_ATTEMPTED)'),
-      details: z.record(z.any()).describe('Event details and metadata')
+      customerId: z.string().describe('Customer ID (e.g. DEMO001)'),
+      shipmentId: z.string().describe('Shipment ID (e.g. SHIP001)'),
+      situation: z.string().describe('Delivery exception situation'),
+      requestedAction: z.enum(['REATTEMPT', 'RESCHEDULE', 'CONTACT_RECIPIENT', 'CONTACT_CUSTOMER', 'ESCALATE', 'NO_ACTION']).describe('Requested recovery action')
     },
-    async ({ customerId, shipmentId, eventType, details }) => {
-      // Safety rule check: Never claim delivery completed without connector confirmation
-      const upperEventType = eventType.trim().toUpperCase();
-      if (upperEventType === 'DELIVERY_COMPLETED' && (!details || !details.connectorConfirmation)) {
+    async ({ customerId, shipmentId, situation, requestedAction }) => {
+      const cleanCustomerId = customerId ? customerId.trim().toUpperCase() : '';
+      const cleanShipmentId = shipmentId ? shipmentId.trim() : '';
+
+      const customer = customersStore[cleanCustomerId];
+      if (!customer) {
         return {
-          isError: true,
           content: [
             {
               type: 'text',
               text: JSON.stringify({
                 success: false,
-                error: 'Safety Rule Violation: Cannot claim delivery completed without verified connector confirmation.'
-              })
+                shipmentId: cleanShipmentId,
+                recoveryAction: 'ESCALATE',
+                nextStep: 'Escalate to customer support desk.',
+                requiredInformation: [],
+                escalationRequired: true,
+                reason: `Customer '${customerId}' not found.`
+              }, null, 2)
             }
           ]
         };
       }
 
-      const eventId = `EVT-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
-      const newEvent = {
-        eventId,
-        timestamp: new Date().toISOString(),
-        customerId: customerId.trim().toUpperCase(),
-        shipmentId: shipmentId.trim().toUpperCase(),
-        eventType: upperEventType,
-        details: details || {}
+      // Safety rule: Missing required information => ESCALATE
+      const normSit = (situation || '').trim().toLowerCase();
+      if (!normSit || normSit.includes('missing') || normSit === 'unknown') {
+        const plan = {
+          success: false,
+          shipmentId: cleanShipmentId,
+          recoveryAction: 'ESCALATE',
+          nextStep: 'Obtain missing delivery details from carrier or human operations.',
+          requiredInformation: ['missing_delivery_details'],
+          escalationRequired: true,
+          reason: 'Required delivery information is missing. Plan cannot proceed autonomously.'
+        };
+        recoveryStore[cleanShipmentId] = { ...plan, customerId: cleanCustomerId, status: 'PLAN_CREATED', createdAt: new Date().toISOString() };
+        return {
+          content: [{ type: 'text', text: JSON.stringify(plan, null, 2) }]
+        };
+      }
+
+      // Safety rule: Mode OFF forbids autonomous proxy handoff
+      if (customer.mode === 'OFF' && requestedAction === 'CONTACT_RECIPIENT') {
+        const plan = {
+          success: false,
+          shipmentId: cleanShipmentId,
+          recoveryAction: 'ESCALATE',
+          nextStep: 'Contact customer directly or route to human support.',
+          requiredInformation: [],
+          escalationRequired: true,
+          reason: 'Customer delivery mode is OFF. Autonomous proxy handoff is unauthorized.'
+        };
+        recoveryStore[cleanShipmentId] = { ...plan, customerId: cleanCustomerId, status: 'PLAN_CREATED', createdAt: new Date().toISOString() };
+        return {
+          content: [{ type: 'text', text: JSON.stringify(plan, null, 2) }]
+        };
+      }
+
+      // Safety rule: Never invent a recipient for proxy handoff
+      if (requestedAction === 'CONTACT_RECIPIENT') {
+        const hasAuthorized = customer.preferences.some(p => p.authorizationStatus === 'AUTHORIZED');
+        if (!hasAuthorized) {
+          const plan = {
+            success: false,
+            shipmentId: cleanShipmentId,
+            recoveryAction: 'ESCALATE',
+            nextStep: 'Contact customer directly for address or recipient update.',
+            requiredInformation: [],
+            escalationRequired: true,
+            reason: 'No authorized recipient registered in Capability 1. Cannot create proxy handoff.'
+          };
+          recoveryStore[cleanShipmentId] = { ...plan, customerId: cleanCustomerId, status: 'PLAN_CREATED', createdAt: new Date().toISOString() };
+          return {
+            content: [{ type: 'text', text: JSON.stringify(plan, null, 2) }]
+          };
+        }
+      }
+
+      // Determine next steps and required information based on requested action
+      let nextStep = '';
+      let requiredInformation = [];
+      let escalationRequired = false;
+      let reason = `Recovery plan created for ${requestedAction} in response to ${situation}.`;
+
+      switch (requestedAction) {
+        case 'REATTEMPT':
+          nextStep = 'Submit reattempt dispatch instruction to carrier logistics connector.';
+          requiredInformation = ['targetReattemptDate', 'deliverySlot'];
+          break;
+        case 'RESCHEDULE':
+          nextStep = 'Confirm customer preferred time slot and submit reschedule instruction to carrier.';
+          requiredInformation = ['newDeliveryDate', 'newTimeWindow'];
+          break;
+        case 'CONTACT_RECIPIENT':
+          nextStep = 'Coordinate parcel handover with authorized proxy recipient.';
+          requiredInformation = ['handoverOtpOrId'];
+          break;
+        case 'CONTACT_CUSTOMER':
+          nextStep = 'Initiate outbound customer voice/SMS outreach for delivery coordination.';
+          requiredInformation = [];
+          break;
+        case 'ESCALATE':
+          nextStep = 'Create priority incident ticket for last-mile logistics operations desk.';
+          requiredInformation = ['courierRefusalReason', 'trackingId'];
+          escalationRequired = true;
+          break;
+        case 'NO_ACTION':
+          nextStep = 'Maintain current delivery tracking monitoring.';
+          requiredInformation = [];
+          break;
+      }
+
+      const planRecord = {
+        success: true,
+        shipmentId: cleanShipmentId,
+        recoveryAction: requestedAction,
+        nextStep,
+        requiredInformation,
+        escalationRequired,
+        reason
       };
 
-      deliveryTimelineStore.push(newEvent);
+      // Save in shared in-memory state with status PLAN_CREATED (never claim executed without connector confirmation)
+      recoveryStore[cleanShipmentId] = {
+        ...planRecord,
+        customerId: cleanCustomerId,
+        status: 'PLAN_CREATED',
+        createdAt: new Date().toISOString()
+      };
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(planRecord, null, 2)
+          }
+        ]
+      };
+    }
+  );
+
+  // Tool 6: get_recovery_status(customerId, shipmentId)
+  mcpServer.tool(
+    'get_recovery_status',
+    'Return current recovery plan and status from shared in-memory state.',
+    {
+      customerId: z.string().describe('Customer ID (e.g. DEMO001)'),
+      shipmentId: z.string().describe('Shipment ID (e.g. SHIP001)')
+    },
+    async ({ customerId, shipmentId }) => {
+      const cleanShipmentId = shipmentId ? shipmentId.trim() : '';
+      const plan = recoveryStore[cleanShipmentId];
+
+      if (!plan) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                success: false,
+                shipmentId: cleanShipmentId,
+                status: 'NO_ACTIVE_PLAN',
+                message: `No recovery plan on file for shipment '${cleanShipmentId}'.`
+              }, null, 2)
+            }
+          ]
+        };
+      }
 
       return {
         content: [
@@ -832,8 +693,7 @@ function createDeliverEaseMcpServer() {
             type: 'text',
             text: JSON.stringify({
               success: true,
-              message: 'Delivery event recorded in audit timeline.',
-              event: newEvent
+              ...plan
             }, null, 2)
           }
         ]
@@ -841,21 +701,201 @@ function createDeliverEaseMcpServer() {
     }
   );
 
-  // 8. get_delivery_timeline
+  // ------------------------------------------
+  // CAPABILITY 3 TOOLS (Delivery Notifications)
+  // ------------------------------------------
+
+  // Tool 7: create_notification(customerId, shipmentId, recipientType, notificationType, message)
   mcpServer.tool(
-    'get_delivery_timeline',
-    'Return chronological delivery decision and event history for a customer shipment.',
+    'create_notification',
+    'Prepare, track, and record a delivery notification request. Status is initialized to PENDING.',
     {
-      customerId: z.string().describe('Customer identifier (e.g. DEMO001)'),
-      shipmentId: z.string().describe('Shipment identifier (e.g. SHIP001, SHIP002)')
+      customerId: z.string().describe('Customer ID (e.g. DEMO001)'),
+      shipmentId: z.string().describe('Shipment ID (e.g. SHIP001)'),
+      recipientType: z.enum(['CUSTOMER', 'AUTHORIZED_RECIPIENT']).describe('Recipient: CUSTOMER or AUTHORIZED_RECIPIENT'),
+      notificationType: z.string().describe('Type: DELIVERY_UPDATE, RECIPIENT_ALERT, ARRIVING_SOON, DELIVERY_FAILED, REATTEMPT_SCHEDULED, RESCHEDULED, DELIVERY_COMPLETED'),
+      message: z.string().describe('Notification text')
+    },
+    async ({ customerId, shipmentId, recipientType, notificationType, message }) => {
+      const cleanCustomerId = customerId ? customerId.trim().toUpperCase() : '';
+      const cleanShipmentId = shipmentId ? shipmentId.trim() : '';
+
+      const customer = customersStore[cleanCustomerId];
+      if (!customer) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                success: false,
+                error: `Customer '${customerId}' not found in Capability 1.`
+              })
+            }
+          ]
+        };
+      }
+
+      let recipientContact = null;
+      let targetRecipientName = customer.customerName || 'Customer';
+
+      // Safety rule: Do not invent recipient contact details. For an authorized recipient, use only Capability 1 data.
+      if (recipientType === 'AUTHORIZED_RECIPIENT') {
+        const authorizedPref = customer.preferences.find(p => p.authorizationStatus === 'AUTHORIZED');
+        if (!authorizedPref) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  success: false,
+                  error: `No authorized recipient found for customer '${customerId}' in Capability 1. Cannot invent recipient details.`
+                })
+              }
+            ]
+          };
+        }
+
+        // Mode OFF check
+        if (customer.mode === 'OFF') {
+          return {
+            isError: true,
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  success: false,
+                  error: 'Customer delivery mode is OFF. Autonomous proxy notification requires explicit customer permission.'
+                })
+              }
+            ]
+          };
+        }
+
+        recipientContact = authorizedPref.recipientPhone;
+        targetRecipientName = authorizedPref.recipientName;
+      }
+
+      const notifId = generateNotificationId();
+      const notificationRecord = {
+        notificationId: notifId,
+        customerId: cleanCustomerId,
+        shipmentId: cleanShipmentId,
+        recipientType,
+        targetRecipientName,
+        recipientContact,
+        notificationType,
+        message,
+        status: 'PENDING',
+        connector: null,
+        createdAt: new Date().toISOString()
+      };
+
+      notificationsStore.push(notificationRecord);
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              notificationId: notifId,
+              customerId: cleanCustomerId,
+              shipmentId: cleanShipmentId,
+              recipientType,
+              notificationType,
+              message,
+              status: 'PENDING'
+            }, null, 2)
+          }
+        ]
+      };
+    }
+  );
+
+  // Tool 8: update_notification_status(notificationId, status, connector, details)
+  mcpServer.tool(
+    'update_notification_status',
+    'Update notification status after external communication connector confirms dispatch.',
+    {
+      notificationId: z.string().describe('Unique notification identifier (e.g. NOTIF-001)'),
+      status: z.enum(['PENDING', 'SENT', 'DELIVERED', 'FAILED']).describe('New status: PENDING, SENT, DELIVERED, FAILED'),
+      connector: z.string().describe('Communication connector name confirming the dispatch (e.g. Twilio, WhatsApp-Gateway)'),
+      details: z.string().optional().describe('Optional delivery logs or tracking metadata')
+    },
+    async ({ notificationId, status, connector, details }) => {
+      const cleanNotifId = notificationId ? notificationId.trim() : '';
+
+      // Safety rule: agent must only mark SENT or DELIVERED after connector provides confirmation
+      if ((status === 'SENT' || status === 'DELIVERED') && (!connector || !connector.trim())) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                success: false,
+                error: `Safety rule violation: Cannot update status to '${status}' without confirmed communication connector.`
+              })
+            }
+          ]
+        };
+      }
+
+      const notif = notificationsStore.find(n => n.notificationId.toLowerCase() === cleanNotifId.toLowerCase());
+      if (!notif) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                success: false,
+                error: `Notification '${notificationId}' not found.`
+              })
+            }
+          ]
+        };
+      }
+
+      notif.status = status;
+      notif.connector = connector.trim();
+      notif.details = details || 'Connector confirmation recorded';
+      notif.updatedAt = new Date().toISOString();
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              success: true,
+              notificationId: notif.notificationId,
+              status: notif.status,
+              connector: notif.connector,
+              updatedAt: notif.updatedAt,
+              details: notif.details
+            }, null, 2)
+          }
+        ]
+      };
+    }
+  );
+
+  // Tool 9: get_notification_history(customerId, shipmentId)
+  mcpServer.tool(
+    'get_notification_history',
+    'Return chronological notification records for a shipment from shared in-memory state.',
+    {
+      customerId: z.string().describe('Customer ID (e.g. DEMO001)'),
+      shipmentId: z.string().describe('Shipment ID (e.g. SHIP001)')
     },
     async ({ customerId, shipmentId }) => {
-      const cleanCustomerId = customerId.trim().toUpperCase();
-      const cleanShipmentId = shipmentId.trim().toUpperCase();
+      const cleanCustomerId = customerId ? customerId.trim().toUpperCase() : '';
+      const cleanShipmentId = shipmentId ? shipmentId.trim() : '';
 
-      const events = deliveryTimelineStore
-        .filter(e => e.shipmentId === cleanShipmentId && e.customerId === cleanCustomerId)
-        .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+      const history = notificationsStore
+        .filter(n => n.shipmentId.toLowerCase() === cleanShipmentId.toLowerCase() && n.customerId.toUpperCase() === cleanCustomerId)
+        .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 
       return {
         content: [
@@ -865,8 +905,8 @@ function createDeliverEaseMcpServer() {
               success: true,
               customerId: cleanCustomerId,
               shipmentId: cleanShipmentId,
-              totalEvents: events.length,
-              timeline: events
+              totalNotifications: history.length,
+              history
             }, null, 2)
           }
         ]
@@ -929,7 +969,7 @@ app.post('/messages', async (req, res) => {
 });
 
 // ==========================================
-// REST API Routes (Capabilities 1, 2, and 3)
+// REST API Routes
 // ==========================================
 
 /**
@@ -940,37 +980,34 @@ app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'UP',
     service: 'DeliverEase Mock & MCP Server',
-    version: '2.0.0',
+    version: '1.0.0',
     capabilities: [
       'CAPABILITY 1 — Trusted Recipient & Delivery Preferences',
-      'CAPABILITY 2 — Delivery Mode & Autonomy Policy Engine',
-      'CAPABILITY 3 — Delivery Escalation & Audit Timeline'
+      'CAPABILITY 2 — Delivery Recovery',
+      'CAPABILITY 3 — Delivery Notifications'
     ],
     mcp: {
       sseEndpoint: '/sse',
       messagesEndpoint: '/messages',
+      toolCount: 9,
       tools: [
         'get_preferences',
         'update_preferences',
         'get_authorized_recipient',
-        'get_mode_policy',
-        'evaluate_delivery_action',
-        'create_resolution_plan',
-        'record_delivery_event',
-        'get_delivery_timeline'
+        'get_recovery_options',
+        'create_recovery_plan',
+        'get_recovery_status',
+        'create_notification',
+        'update_notification_status',
+        'get_notification_history'
       ]
-    },
-    demoData: {
-      customer: 'DEMO001',
-      shipments: Object.keys(shipmentsStore),
-      totalTimelineEvents: deliveryTimelineStore.length
     },
     timestamp: new Date().toISOString()
   });
 });
 
 // ------------------------------------------
-// Capability 1 REST Endpoints
+// REST ROUTES — CAPABILITY 1
 // ------------------------------------------
 
 /**
@@ -978,13 +1015,22 @@ app.get('/health', (req, res) => {
  */
 app.get('/api/preferences/:customerId', (req, res) => {
   const { customerId } = req.params;
+
   if (!customerId || !customerId.trim()) {
-    return res.status(400).json({ success: false, error: 'Invalid or missing customerId parameter.' });
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid or missing customerId parameter.'
+    });
   }
 
   const customer = customersStore[customerId.trim().toUpperCase()];
+
   if (!customer) {
-    return res.status(404).json({ success: false, error: `Customer not found with ID '${customerId}'.`, customerId });
+    return res.status(404).json({
+      success: false,
+      error: `Customer not found with ID '${customerId}'.`,
+      customerId
+    });
   }
 
   return res.status(200).json({
@@ -1001,34 +1047,54 @@ app.get('/api/preferences/:customerId', (req, res) => {
 app.put('/api/preferences/:customerId', (req, res) => {
   const { customerId } = req.params;
   const key = customerId ? customerId.trim().toUpperCase() : '';
+
   if (!key) {
-    return res.status(400).json({ success: false, error: 'Invalid or missing customerId parameter.' });
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid or missing customerId parameter.'
+    });
   }
 
   const existingCustomer = customersStore[key];
   if (!existingCustomer) {
-    return res.status(404).json({ success: false, error: `Customer '${customerId}' does not exist.` });
+    return res.status(404).json({
+      success: false,
+      error: `Customer '${customerId}' does not exist. Cannot update preferences for non-existent customer.`
+    });
   }
 
   const { mode, preferences, location, recipientName, recipientRelation, recipientPhone, preferredTime, authorizationStatus } = req.body || {};
 
+  // Validate mode if provided
   if (mode !== undefined) {
     if (typeof mode !== 'string' || !VALID_MODES.includes(mode.trim().toUpperCase())) {
-      return res.status(400).json({ success: false, error: `Invalid mode "${mode}". Must be one of: ${VALID_MODES.join(', ')}.` });
+      return res.status(400).json({
+        success: false,
+        error: `Invalid mode "${mode}". Must be one of: ${VALID_MODES.join(', ')}.`
+      });
     }
     existingCustomer.mode = mode.trim().toUpperCase();
   }
 
+  // Preferences array provided
   if (preferences !== undefined) {
     if (!Array.isArray(preferences)) {
-      return res.status(400).json({ success: false, error: 'Preferences must be an array of preference objects.' });
+      return res.status(400).json({
+        success: false,
+        error: 'Preferences must be an array of preference objects.'
+      });
     }
+
     for (let i = 0; i < preferences.length; i++) {
       const errorMsg = validatePreferenceItem(preferences[i]);
       if (errorMsg) {
-        return res.status(400).json({ success: false, error: `Validation error at preferences[${i}]: ${errorMsg}` });
+        return res.status(400).json({
+          success: false,
+          error: `Validation error at preferences[${i}]: ${errorMsg}`
+        });
       }
     }
+
     existingCustomer.preferences = preferences.map(p => ({
       location: p.location.trim(),
       recipientName: p.recipientName ? p.recipientName.trim() : '',
@@ -1037,12 +1103,22 @@ app.put('/api/preferences/:customerId', (req, res) => {
       preferredTime: p.preferredTime ? p.preferredTime.trim() : '',
       authorizationStatus: p.authorizationStatus ? p.authorizationStatus.trim().toUpperCase() : 'AUTHORIZED'
     }));
-  } else if (location !== undefined) {
+  }
+  // Single preference object provided
+  else if (location !== undefined) {
     const prefError = validatePreferenceItem(req.body);
-    if (prefError) return res.status(400).json({ success: false, error: prefError });
+    if (prefError) {
+      return res.status(400).json({
+        success: false,
+        error: prefError
+      });
+    }
 
     const normLocation = location.trim();
-    const existingIndex = existingCustomer.preferences.findIndex(p => p.location.toLowerCase() === normLocation.toLowerCase());
+    const existingIndex = existingCustomer.preferences.findIndex(
+      p => p.location.toLowerCase() === normLocation.toLowerCase()
+    );
+
     const updatedPref = {
       location: normLocation,
       recipientName: recipientName !== undefined ? String(recipientName).trim() : (existingIndex >= 0 ? existingCustomer.preferences[existingIndex].recipientName : ''),
@@ -1052,12 +1128,18 @@ app.put('/api/preferences/:customerId', (req, res) => {
       authorizationStatus: authorizationStatus !== undefined ? String(authorizationStatus).trim().toUpperCase() : (existingIndex >= 0 ? existingCustomer.preferences[existingIndex].authorizationStatus : 'AUTHORIZED')
     };
 
-    if (existingIndex >= 0) existingCustomer.preferences[existingIndex] = updatedPref;
-    else existingCustomer.preferences.push(updatedPref);
+    if (existingIndex >= 0) {
+      existingCustomer.preferences[existingIndex] = updatedPref;
+    } else {
+      existingCustomer.preferences.push(updatedPref);
+    }
   }
 
   if (mode === undefined && preferences === undefined && location === undefined) {
-    return res.status(400).json({ success: false, error: 'Request body must contain "mode", "preferences" array, or a preference object with "location".' });
+    return res.status(400).json({
+      success: false,
+      error: 'Request body must contain "mode", "preferences" array, or a preference object with "location".'
+    });
   }
 
   return res.status(200).json({
@@ -1074,11 +1156,19 @@ app.put('/api/preferences/:customerId', (req, res) => {
  */
 app.get('/api/recipient', (req, res) => {
   const { customerId, location } = req.query;
+
   if (!customerId || !customerId.trim()) {
-    return res.status(400).json({ success: false, error: 'Missing required query parameter: "customerId" is required.' });
+    return res.status(400).json({
+      success: false,
+      error: 'Missing required query parameter: "customerId" is required.'
+    });
   }
+
   if (!location || !location.trim()) {
-    return res.status(400).json({ success: false, error: 'Missing required query parameter: "location" is required.' });
+    return res.status(400).json({
+      success: false,
+      error: 'Missing required query parameter: "location" is required.'
+    });
   }
 
   const cleanCustomerId = customerId.trim().toUpperCase();
@@ -1107,7 +1197,10 @@ app.get('/api/recipient', (req, res) => {
     });
   }
 
-  const matchedPref = customer.preferences.find(p => p.location.trim().toLowerCase() === cleanLocation.toLowerCase());
+  const matchedPref = customer.preferences.find(
+    p => p.location.trim().toLowerCase() === cleanLocation.toLowerCase()
+  );
+
   if (!matchedPref || matchedPref.authorizationStatus !== 'AUTHORIZED') {
     return res.status(200).json({
       success: true,
@@ -1140,147 +1233,281 @@ app.get('/api/recipient', (req, res) => {
 });
 
 // ------------------------------------------
-// Capability 2 REST Endpoints
+// REST ROUTES — CAPABILITY 2 (Delivery Recovery)
 // ------------------------------------------
 
 /**
- * GET /api/policy/:customerId
+ * POST /api/recovery/options
+ * Evaluate recovery actions
  */
-app.get('/api/policy/:customerId', (req, res) => {
-  const { customerId } = req.params;
-  const key = customerId ? customerId.trim().toUpperCase() : '';
-  const customer = customersStore[key];
-  if (!customer) {
-    return res.status(404).json({ success: false, error: `Customer not found with ID '${customerId}'.` });
-  }
-
-  const policy = evaluateModePolicy(customer);
-  return res.status(200).json({ success: true, policy });
-});
-
-/**
- * POST /api/policy/:customerId/evaluate
- */
-app.post('/api/policy/:customerId/evaluate', (req, res) => {
-  const { customerId } = req.params;
-  const { situation } = req.body || {};
-  const key = customerId ? customerId.trim().toUpperCase() : '';
-  const customer = customersStore[key];
-
-  if (!customer) {
-    return res.status(404).json({
-      success: false,
-      decision: 'ESCALATE',
-      error: `Customer '${customerId}' not found.`
-    });
-  }
-
-  const evaluation = evaluateActionDecision(customer, situation);
-  return res.status(200).json({ success: true, evaluation });
-});
-
-// ------------------------------------------
-// Capability 3 REST Endpoints
-// ------------------------------------------
-
-/**
- * POST /api/resolution-plan
- */
-app.post('/api/resolution-plan', (req, res) => {
+app.post('/api/recovery/options', (req, res) => {
   const { customerId, shipmentId, situation } = req.body || {};
   if (!customerId || !shipmentId) {
-    return res.status(400).json({ success: false, error: 'Both customerId and shipmentId are required.' });
+    return res.status(400).json({ success: false, error: 'customerId and shipmentId are required.' });
   }
 
-  const key = customerId.trim().toUpperCase();
-  const customer = customersStore[key];
-  const plan = buildResolutionPlan(customerId, shipmentId, situation, customer);
-
-  // Automatically record resolution plan creation in audit timeline
-  const eventId = `EVT-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
-  deliveryTimelineStore.push({
-    eventId,
-    timestamp: new Date().toISOString(),
-    customerId: key,
-    shipmentId: shipmentId.trim().toUpperCase(),
-    eventType: 'RESOLUTION_PLAN_CREATED',
-    details: {
-      situation,
-      resolutionType: plan.resolutionType,
-      priority: plan.priority
-    }
-  });
-
-  return res.status(200).json({ success: true, plan });
-});
-
-/**
- * POST /api/timeline/events
- */
-app.post('/api/timeline/events', (req, res) => {
-  const { customerId, shipmentId, eventType, details } = req.body || {};
-  if (!customerId || !shipmentId || !eventType) {
-    return res.status(400).json({ success: false, error: 'customerId, shipmentId, and eventType are required.' });
-  }
-
-  const upperType = eventType.trim().toUpperCase();
-  if (upperType === 'DELIVERY_COMPLETED' && (!details || !details.connectorConfirmation)) {
-    return res.status(400).json({
-      success: false,
-      error: 'Safety Rule Violation: Delivery completion requires verified connector confirmation.'
+  const customer = customersStore[customerId.trim().toUpperCase()];
+  if (!customer) {
+    return res.status(404).json({
+      shipmentId,
+      situation: situation || 'UNKNOWN',
+      availableActions: ['ESCALATE'],
+      recommendedAction: 'ESCALATE',
+      reason: `Customer '${customerId}' not found.`,
+      escalationRequired: true
     });
   }
 
-  const eventId = `EVT-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
-  const newEvent = {
-    eventId,
-    timestamp: new Date().toISOString(),
-    customerId: customerId.trim().toUpperCase(),
-    shipmentId: shipmentId.trim().toUpperCase(),
-    eventType: upperType,
-    details: details || {}
-  };
-
-  deliveryTimelineStore.push(newEvent);
-  return res.status(201).json({ success: true, event: newEvent });
+  const options = evaluateRecoveryOptions(customer, shipmentId.trim(), situation);
+  return res.status(200).json({ success: true, ...options });
 });
 
 /**
- * GET /api/timeline
+ * POST /api/recovery/plan
+ * Create a recovery plan
  */
-app.get('/api/timeline', (req, res) => {
-  const { customerId, shipmentId } = req.query;
-  if (!customerId || !shipmentId) {
-    return res.status(400).json({ success: false, error: 'Query parameters customerId and shipmentId are required.' });
+app.post('/api/recovery/plan', (req, res) => {
+  const { customerId, shipmentId, situation, requestedAction } = req.body || {};
+  if (!customerId || !shipmentId || !requestedAction) {
+    return res.status(400).json({ success: false, error: 'customerId, shipmentId, and requestedAction are required.' });
+  }
+
+  if (!ALLOWED_RECOVERY_ACTIONS.includes(requestedAction)) {
+    return res.status(400).json({ success: false, error: `Invalid requestedAction. Must be one of: ${ALLOWED_RECOVERY_ACTIONS.join(', ')}` });
   }
 
   const cleanCustomerId = customerId.trim().toUpperCase();
-  const cleanShipmentId = shipmentId.trim().toUpperCase();
+  const cleanShipmentId = shipmentId.trim();
+  const customer = customersStore[cleanCustomerId];
 
-  const events = deliveryTimelineStore
-    .filter(e => e.shipmentId === cleanShipmentId && e.customerId === cleanCustomerId)
-    .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+  if (!customer) {
+    return res.status(404).json({ success: false, error: `Customer '${customerId}' not found.` });
+  }
 
-  return res.status(200).json({
+  // Safety rule: Missing required information => ESCALATE
+  const normSit = (situation || '').trim().toLowerCase();
+  if (!normSit || normSit.includes('missing') || normSit === 'unknown') {
+    const plan = {
+      success: false,
+      shipmentId: cleanShipmentId,
+      recoveryAction: 'ESCALATE',
+      nextStep: 'Obtain missing delivery details from carrier or human operations.',
+      requiredInformation: ['missing_delivery_details'],
+      escalationRequired: true,
+      reason: 'Required delivery information is missing. Plan cannot proceed autonomously.'
+    };
+    recoveryStore[cleanShipmentId] = { ...plan, customerId: cleanCustomerId, status: 'PLAN_CREATED', createdAt: new Date().toISOString() };
+    return res.status(200).json(plan);
+  }
+
+  // Safety rule: Mode OFF forbids autonomous proxy handoff
+  if (customer.mode === 'OFF' && requestedAction === 'CONTACT_RECIPIENT') {
+    const plan = {
+      success: false,
+      shipmentId: cleanShipmentId,
+      recoveryAction: 'ESCALATE',
+      nextStep: 'Contact customer directly or route to human support.',
+      requiredInformation: [],
+      escalationRequired: true,
+      reason: 'Customer delivery mode is OFF. Autonomous proxy handoff is unauthorized.'
+    };
+    recoveryStore[cleanShipmentId] = { ...plan, customerId: cleanCustomerId, status: 'PLAN_CREATED', createdAt: new Date().toISOString() };
+    return res.status(200).json(plan);
+  }
+
+  let nextStep = 'Proceed with recovery action.';
+  let requiredInformation = [];
+  let escalationRequired = requestedAction === 'ESCALATE';
+
+  if (requestedAction === 'REATTEMPT') {
+    nextStep = 'Submit reattempt dispatch instruction to carrier logistics connector.';
+    requiredInformation = ['targetReattemptDate', 'deliverySlot'];
+  } else if (requestedAction === 'RESCHEDULE') {
+    nextStep = 'Confirm customer preferred time slot and submit reschedule instruction to carrier.';
+    requiredInformation = ['newDeliveryDate', 'newTimeWindow'];
+  } else if (requestedAction === 'CONTACT_RECIPIENT') {
+    nextStep = 'Coordinate parcel handover with authorized proxy recipient.';
+    requiredInformation = ['handoverOtpOrId'];
+  } else if (requestedAction === 'CONTACT_CUSTOMER') {
+    nextStep = 'Initiate outbound customer voice/SMS outreach for delivery coordination.';
+  } else if (requestedAction === 'ESCALATE') {
+    nextStep = 'Create priority incident ticket for last-mile logistics operations desk.';
+    requiredInformation = ['courierRefusalReason', 'trackingId'];
+  }
+
+  const planRecord = {
     success: true,
-    customerId: cleanCustomerId,
     shipmentId: cleanShipmentId,
-    totalEvents: events.length,
-    timeline: events
+    recoveryAction: requestedAction,
+    nextStep,
+    requiredInformation,
+    escalationRequired,
+    reason: `Recovery plan created for ${requestedAction} in response to ${situation}.`
+  };
+
+  recoveryStore[cleanShipmentId] = {
+    ...planRecord,
+    customerId: cleanCustomerId,
+    status: 'PLAN_CREATED',
+    createdAt: new Date().toISOString()
+  };
+
+  return res.status(200).json(planRecord);
+});
+
+/**
+ * GET /api/recovery/status/:shipmentId
+ */
+app.get('/api/recovery/status/:shipmentId', (req, res) => {
+  const { shipmentId } = req.params;
+  const plan = recoveryStore[shipmentId.trim()];
+
+  if (!plan) {
+    return res.status(404).json({
+      success: false,
+      shipmentId,
+      status: 'NO_ACTIVE_PLAN',
+      message: `No recovery plan on file for shipment '${shipmentId}'.`
+    });
+  }
+
+  return res.status(200).json({ success: true, ...plan });
+});
+
+// ------------------------------------------
+// REST ROUTES — CAPABILITY 3 (Delivery Notifications)
+// ------------------------------------------
+
+/**
+ * POST /api/notifications
+ * Create a delivery notification
+ */
+app.post('/api/notifications', (req, res) => {
+  const { customerId, shipmentId, recipientType, notificationType, message } = req.body || {};
+  if (!customerId || !shipmentId || !recipientType || !notificationType || !message) {
+    return res.status(400).json({ success: false, error: 'customerId, shipmentId, recipientType, notificationType, and message are required.' });
+  }
+
+  const cleanCustomerId = customerId.trim().toUpperCase();
+  const customer = customersStore[cleanCustomerId];
+  if (!customer) {
+    return res.status(404).json({ success: false, error: `Customer '${customerId}' not found in Capability 1.` });
+  }
+
+  if (!['CUSTOMER', 'AUTHORIZED_RECIPIENT'].includes(recipientType)) {
+    return res.status(400).json({ success: false, error: 'recipientType must be CUSTOMER or AUTHORIZED_RECIPIENT.' });
+  }
+
+  let recipientContact = null;
+  let targetRecipientName = customer.customerName || 'Customer';
+
+  if (recipientType === 'AUTHORIZED_RECIPIENT') {
+    const authorizedPref = customer.preferences.find(p => p.authorizationStatus === 'AUTHORIZED');
+    if (!authorizedPref) {
+      return res.status(400).json({
+        success: false,
+        error: `No authorized recipient found for customer '${customerId}' in Capability 1. Cannot invent recipient details.`
+      });
+    }
+
+    if (customer.mode === 'OFF') {
+      return res.status(403).json({
+        success: false,
+        error: 'Customer delivery mode is OFF. Autonomous proxy notification requires explicit customer permission.'
+      });
+    }
+
+    recipientContact = authorizedPref.recipientPhone;
+    targetRecipientName = authorizedPref.recipientName;
+  }
+
+  const notifId = generateNotificationId();
+  const notificationRecord = {
+    notificationId: notifId,
+    customerId: cleanCustomerId,
+    shipmentId: shipmentId.trim(),
+    recipientType,
+    targetRecipientName,
+    recipientContact,
+    notificationType,
+    message,
+    status: 'PENDING',
+    connector: null,
+    createdAt: new Date().toISOString()
+  };
+
+  notificationsStore.push(notificationRecord);
+
+  return res.status(201).json({
+    notificationId: notifId,
+    customerId: cleanCustomerId,
+    shipmentId: shipmentId.trim(),
+    recipientType,
+    notificationType,
+    message,
+    status: 'PENDING'
   });
 });
 
 /**
- * GET /api/shipments/:shipmentId
+ * PUT /api/notifications/:notificationId
+ * Update notification status after connector confirmation
  */
-app.get('/api/shipments/:shipmentId', (req, res) => {
-  const { shipmentId } = req.params;
-  const key = shipmentId ? shipmentId.trim().toUpperCase() : '';
-  const shipment = shipmentsStore[key];
-  if (!shipment) {
-    return res.status(404).json({ success: false, error: `Shipment '${shipmentId}' not found.` });
+app.put('/api/notifications/:notificationId', (req, res) => {
+  const { notificationId } = req.params;
+  const { status, connector, details } = req.body || {};
+
+  if (!status || !ALLOWED_NOTIFICATION_STATUSES.includes(status)) {
+    return res.status(400).json({ success: false, error: `Invalid status. Must be one of: ${ALLOWED_NOTIFICATION_STATUSES.join(', ')}` });
   }
-  return res.status(200).json({ success: true, shipment });
+
+  // Safety rule: Cannot mark SENT or DELIVERED without connector confirmation
+  if ((status === 'SENT' || status === 'DELIVERED') && (!connector || !connector.trim())) {
+    return res.status(400).json({
+      success: false,
+      error: `Safety rule violation: Cannot update status to '${status}' without confirmed communication connector.`
+    });
+  }
+
+  const notif = notificationsStore.find(n => n.notificationId.toLowerCase() === notificationId.trim().toLowerCase());
+  if (!notif) {
+    return res.status(404).json({ success: false, error: `Notification '${notificationId}' not found.` });
+  }
+
+  notif.status = status;
+  notif.connector = connector ? connector.trim() : notif.connector;
+  notif.details = details || 'Connector confirmation recorded';
+  notif.updatedAt = new Date().toISOString();
+
+  return res.status(200).json({
+    success: true,
+    notificationId: notif.notificationId,
+    status: notif.status,
+    connector: notif.connector,
+    updatedAt: notif.updatedAt,
+    details: notif.details
+  });
+});
+
+/**
+ * GET /api/notifications/:shipmentId
+ * Query chronological notification history
+ */
+app.get('/api/notifications/:shipmentId', (req, res) => {
+  const { shipmentId } = req.params;
+  const customerId = req.query.customerId ? req.query.customerId.trim().toUpperCase() : 'DEMO001';
+
+  const history = notificationsStore
+    .filter(n => n.shipmentId.toLowerCase() === shipmentId.trim().toLowerCase() && n.customerId.toUpperCase() === customerId)
+    .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+  return res.status(200).json({
+    success: true,
+    customerId,
+    shipmentId: shipmentId.trim(),
+    totalNotifications: history.length,
+    history
+  });
 });
 
 /**
@@ -1288,16 +1515,17 @@ app.get('/api/shipments/:shipmentId', (req, res) => {
  * POST /api/reset
  */
 app.post('/api/reset', (req, res) => {
-  customersStore = getInitialSeedCustomers();
-  shipmentsStore = getInitialSeedShipments();
-  deliveryTimelineStore = getInitialSeedTimeline();
+  customersStore = getInitialSeedData();
+  recoveryStore = getInitialRecoveryData();
+  notificationsStore = getInitialNotificationsData();
+  notificationCounter = 1;
 
   res.status(200).json({
     success: true,
-    message: 'Demo customer, shipments, and audit timeline data reset to initial state.',
+    message: 'All 3 DeliverEase capabilities reset to initial demo state.',
     customers: Object.keys(customersStore),
-    shipments: Object.keys(shipmentsStore),
-    totalEvents: deliveryTimelineStore.length
+    recoveryShipments: Object.keys(recoveryStore),
+    totalNotifications: notificationsStore.length
   });
 });
 
@@ -1315,12 +1543,12 @@ app.use((req, res) => {
       'GET /api/preferences/:customerId',
       'PUT /api/preferences/:customerId',
       'GET /api/recipient?customerId=...&location=...',
-      'GET /api/policy/:customerId',
-      'POST /api/policy/:customerId/evaluate',
-      'POST /api/resolution-plan',
-      'POST /api/timeline/events',
-      'GET /api/timeline?customerId=...&shipmentId=...',
-      'GET /api/shipments/:shipmentId',
+      'POST /api/recovery/options',
+      'POST /api/recovery/plan',
+      'GET /api/recovery/status/:shipmentId',
+      'POST /api/notifications',
+      'PUT /api/notifications/:notificationId',
+      'GET /api/notifications/:shipmentId',
       'POST /api/reset'
     ]
   });
@@ -1345,12 +1573,12 @@ if (require.main === module) {
     console.log(`📡 Health Check : http://${HOST}:${PORT}/health`);
     console.log(`🔌 MCP SSE      : http://${HOST}:${PORT}/sse`);
     console.log(`💬 MCP Messages : http://${HOST}:${PORT}/messages`);
-    console.log(`📦 Capabilities : 3 Custom Capabilities Active`);
+    console.log(`📦 Capabilities : 3 Capabilities Active`);
     console.log(`   1. Trusted Recipient & Delivery Preferences`);
-    console.log(`   2. Delivery Mode & Autonomy Policy Engine`);
-    console.log(`   3. Delivery Escalation & Audit Timeline`);
-    console.log(`🛠️  MCP Tools   : 8 Registered Tools`);
-    console.log(`📋 Demo Data    : DEMO001 (Home, Hostel, Office), SHIP001, SHIP002`);
+    console.log(`   2. Delivery Recovery`);
+    console.log(`   3. Delivery Notifications`);
+    console.log(`🛠️  MCP Tools   : 9 Registered Tools`);
+    console.log(`📋 Demo Customer: DEMO001 (Home, Hostel, Office)`);
     console.log(`===================================================`);
   });
 }
